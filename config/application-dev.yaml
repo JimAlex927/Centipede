@@ -1,0 +1,25 @@
+server:
+  address: ":7788"
+  read_header_timeout: "5s"
+  read_timeout: "20s"
+  write_timeout: "20s"
+  idle_timeout: "60s"
+  shutdown_timeout: "10s"
+
+database:
+  url: "postgres://centipede:centipede_dev@192.168.154.128:5433/centipede?sslmode=disable"
+  max_connections: 10
+  min_connections: 2
+
+auth:
+  jwt_secret: "dev-only-change-me-please"
+  access_token_ttl: "15m"
+  refresh_token_ttl: "720h"
+  refresh_cookie: "centipede_refresh"
+  cookie_secure: false
+
+sso:
+  issuer_url: "http://localhost:7777"
+  client_id: "centipede.web"
+  redirect_url: "http://localhost:7788/oauth/callback"
+  scopes: ["openid", "profile", "email"]

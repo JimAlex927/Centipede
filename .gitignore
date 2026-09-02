@@ -1,0 +1,16 @@
+.env
+.cache/
+.gocache/
+.gomodcache/
+.corepack/
+.pnpm/
+.pnpm-store/
+bin/
+coverage.out
+*.exe
+.idea/
+.vscode/
+frontend/node_modules/
+frontend/dist/
+logs/
+data/

@@ -1,0 +1,25 @@
+server:
+  address: ":7788"
+  read_header_timeout: "5s"
+  read_timeout: "20s"
+  write_timeout: "20s"
+  idle_timeout: "60s"
+  shutdown_timeout: "10s"
+
+database:
+  url: "CHANGE_ME"
+  max_connections: 30
+  min_connections: 5
+
+auth:
+  jwt_secret: "CHANGE_ME"
+  access_token_ttl: "15m"
+  refresh_token_ttl: "720h"
+  refresh_cookie: "centipede_refresh"
+  cookie_secure: true
+
+sso:
+  issuer_url: "CHANGE_ME"
+  client_id: "centipede.web"
+  redirect_url: "CHANGE_ME"
+  scopes: ["openid", "profile", "email"]
