@@ -632,6 +632,7 @@ func (handler *Handler) updatePage(c *gin.Context) {
 		handler.writeRepositoryError(c, err, "Page not found")
 		return
 	}
+	handler.notifyPageUpdated(c.Request.Context(), page, current.User.ID)
 	writeData(c, http.StatusOK, withPagePermissions(page))
 }
 
