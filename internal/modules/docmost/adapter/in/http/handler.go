@@ -67,6 +67,7 @@ func (handler *Handler) Register(router gin.IRouter) {
 	api.POST("/shares/tree", handler.shareTree)
 	api.POST("/search/share-search", handler.shareSearch)
 	api.POST("/shares/transclusion/lookup", handler.shareTransclusionLookup)
+	api.GET("/files/public/:fileId/:fileName", handler.getPublicFile)
 	api.GET("/attachments/img/:attachmentId/:fileName", handler.getPublicImage)
 	api.POST("/version", handler.version)
 
@@ -795,7 +796,7 @@ func (handler *Handler) migrationStatus(c *gin.Context) {
 	writeData(c, http.StatusOK, gin.H{
 		"runtime": "go", "nodeRequired": true,
 		"implemented": []string{"auth-core", "users", "workspace-core", "spaces-core", "pages-core", "groups-core", "comments-core", "search-core", "shared-page-search", "attachment-search", "shares-core", "local-attachments", "file-task-query", "notifications-core", "sessions", "page-history", "collaboration-core", "realtime-core", "transclusion-lookup", "transclusion-attachment-copy", "mail-delivery", "database-integration-validation", "page-access-core", "single-page-export", "archive-export", "export-attachments", "docx-export", "docx-import", "pdf-text-import", "markdown-html-import", "generic-zip-import", "zip-attachment-import", "notion-confluence-basic-import"},
-		"pending":     []string{"pdf-ocr-import", "notion-confluence-full-import", "page-permissions-management", "shared-attachments", "docmost-schema-migrations", "enterprise"},
+		"pending":     []string{"pdf-ocr-import", "notion-confluence-full-import", "page-permissions-management", "docmost-schema-migrations", "enterprise"},
 	})
 }
 

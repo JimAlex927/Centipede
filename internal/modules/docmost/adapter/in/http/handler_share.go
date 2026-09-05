@@ -206,6 +206,11 @@ func (handler *Handler) sharedPageInfo(c *gin.Context) {
 		writeError(c, http.StatusNotFound, "Shared page not found")
 		return
 	}
+	page.Content, err = handler.preparePublicPageContent(page.Content, page.ID, share.WorkspaceID)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to prepare shared page")
+		return
+	}
 	writeData(c, http.StatusOK, gin.H{"page": page, "share": share, "features": []string{}})
 }
 

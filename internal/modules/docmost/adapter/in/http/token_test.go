@@ -29,6 +29,23 @@ func TestTokenRoundTrip(t *testing.T) {
 	}
 }
 
+func TestAttachmentTokenAllowsPageScopedClaims(t *testing.T) {
+	service := newTokenService("test-secret-not-for-production")
+	raw, err := service.issue(tokenClaims{
+		AttachmentID: "attachment",
+		PageID:       "page",
+		WorkspaceID:  "workspace",
+		Type:         "attachment",
+	}, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claims, err := service.parse(raw, "attachment")
+	if err != nil || claims.AttachmentID != "attachment" || claims.PageID != "page" {
+		t.Fatalf("attachment token was not parsed: %+v, %v", claims, err)
+	}
+}
+
 func TestTokenRejectsInvalidClaims(t *testing.T) {
 	service := newTokenService("test-secret-not-for-production")
 	now := time.Now().Unix()

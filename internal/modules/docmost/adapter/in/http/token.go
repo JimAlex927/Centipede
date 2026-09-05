@@ -11,13 +11,15 @@ import (
 )
 
 type tokenClaims struct {
-	Subject     string `json:"sub"`
-	Email       string `json:"email,omitempty"`
-	WorkspaceID string `json:"workspaceId"`
-	Type        string `json:"type"`
-	SessionID   string `json:"sessionId,omitempty"`
-	IssuedAt    int64  `json:"iat"`
-	ExpiresAt   int64  `json:"exp"`
+	Subject      string `json:"sub"`
+	Email        string `json:"email,omitempty"`
+	AttachmentID string `json:"attachmentId,omitempty"`
+	PageID       string `json:"pageId,omitempty"`
+	WorkspaceID  string `json:"workspaceId"`
+	Type         string `json:"type"`
+	SessionID    string `json:"sessionId,omitempty"`
+	IssuedAt     int64  `json:"iat"`
+	ExpiresAt    int64  `json:"exp"`
 }
 
 type tokenService struct {
@@ -64,7 +66,10 @@ func (service *tokenService) parse(raw, expectedType string) (tokenClaims, error
 		return tokenClaims{}, errors.New("invalid token")
 	}
 	now := time.Now().UTC().Unix()
-	if claims.Subject == "" || claims.WorkspaceID == "" || claims.Type != expectedType || claims.ExpiresAt <= now || claims.IssuedAt > now+60 {
+	if claims.WorkspaceID == "" || claims.Type != expectedType || claims.ExpiresAt <= now || claims.IssuedAt > now+60 {
+		return tokenClaims{}, errors.New("invalid token")
+	}
+	if (claims.Type == "access" || claims.Type == "collab") && claims.Subject == "" {
 		return tokenClaims{}, errors.New("invalid token")
 	}
 	// Access tokens must participate in session revocation. Other token types

@@ -342,6 +342,11 @@ func (handler *Handler) lookupTransclusionForShare(c *gin.Context, share domain.
 		base["status"] = "not_found"
 		return base
 	}
+	content, err = handler.preparePublicPageContent(content, page.ID, share.WorkspaceID)
+	if err != nil {
+		base["status"] = "no_access"
+		return base
+	}
 	base["content"] = content
 	base["sourceUpdatedAt"] = page.UpdatedAt
 	return base

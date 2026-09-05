@@ -287,6 +287,25 @@ func (handler *Handler) getFile(c *gin.Context) {
 	handler.serveAttachment(c, attachment, false)
 }
 
+func (handler *Handler) getPublicFile(c *gin.Context) {
+	claims, err := handler.tokens.parse(c.Query("jwt"), "attachment")
+	if err != nil {
+		writeError(c, http.StatusBadRequest, "Expired or invalid attachment access token")
+		return
+	}
+	fileID := c.Param("fileId")
+	if fileID == "" || fileID != claims.AttachmentID {
+		writeError(c, http.StatusNotFound, "File not found")
+		return
+	}
+	attachment, err := handler.repository.AttachmentByID(c.Request.Context(), fileID, claims.WorkspaceID)
+	if err != nil || attachment.PageID == nil || attachment.SpaceID == nil || attachment.Type == nil || *attachment.Type != "file" || claims.PageID != *attachment.PageID || c.Param("fileName") != attachment.FileName {
+		writeError(c, http.StatusNotFound, "File not found")
+		return
+	}
+	handler.serveAttachment(c, attachment, true)
+}
+
 func (handler *Handler) getPublicImage(c *gin.Context) {
 	attachmentID := c.Param("attachmentId")
 	// The attachment id is globally random and the query is restricted to
