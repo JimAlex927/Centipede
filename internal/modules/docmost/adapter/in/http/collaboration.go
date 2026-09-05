@@ -46,10 +46,18 @@ func NewCollaborationHandler(repository *postgres.Repository, secret string, all
 	store := repository.CollaborationStore()
 	server := ygows.NewServerWithPersistence(store)
 	handler := &CollaborationHandler{server: server, store: store}
-	store.SetVersionCallback(func(ctx context.Context, pageID, workspaceID string, actorIDs []string) {
+	store.SetVersionCallback(func(ctx context.Context, pageID, workspaceID string, actorIDs []string, content []byte) {
 		actorID := ""
 		if len(actorIDs) > 0 {
 			actorID = actorIDs[0]
+		}
+		mentionDeliveries, _ := repository.CreatePageMentionNotifications(ctx, pageID, workspaceID, actorID, content)
+		if handler.realtime != nil {
+			for _, delivery := range mentionDeliveries {
+				handler.realtime.PublishNotification(workspaceID, delivery.UserID, map[string]any{
+					"type": "page.user_mention", "notificationId": delivery.ID, "pageId": pageID,
+				})
+			}
 		}
 		deliveries, err := repository.CreatePageUpdateNotifications(ctx, pageID, workspaceID, actorID, actorIDs)
 		if err != nil || handler.realtime == nil {

@@ -21,7 +21,7 @@ type CollaborationStore struct {
 
 	mu           sync.Mutex
 	contributors map[string]map[string]struct{}
-	onVersion    func(context.Context, string, string, []string)
+	onVersion    func(context.Context, string, string, []string, []byte)
 }
 
 func (repository *Repository) CollaborationStore() *CollaborationStore {
@@ -52,7 +52,7 @@ func (store *CollaborationStore) consumeContributors(room string) []string {
 	return result
 }
 
-func (store *CollaborationStore) SetVersionCallback(callback func(context.Context, string, string, []string)) {
+func (store *CollaborationStore) SetVersionCallback(callback func(context.Context, string, string, []string, []byte)) {
 	store.mu.Lock()
 	store.onVersion = callback
 	store.mu.Unlock()
@@ -167,6 +167,7 @@ func (store *CollaborationStore) SaveVersion(ctx context.Context, room, _ string
 
 	var inserted int64
 	var workspaceID string
+	var snapshot []byte
 	err = store.db.db.QueryRow(ctx, `
 INSERT INTO page_history
   (page_id, slug_id, title, content, icon, cover_photo, last_updated_by_id,
@@ -181,7 +182,7 @@ WHERE p.id = $1 AND p.deleted_at IS NULL
     WHERE h.page_id = p.id
       AND h.content IS NOT DISTINCT FROM p.content
   )
-RETURNING 1, workspace_id::text`, pageID).Scan(&inserted, &workspaceID)
+RETURNING 1, workspace_id::text, content`, pageID).Scan(&inserted, &workspaceID, &snapshot)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, nil
 	}
@@ -191,7 +192,7 @@ RETURNING 1, workspace_id::text`, pageID).Scan(&inserted, &workspaceID)
 		callback := store.onVersion
 		store.mu.Unlock()
 		if callback != nil {
-			callback(ctx, pageID, workspaceID, actors)
+			callback(ctx, pageID, workspaceID, actors, snapshot)
 		}
 	}
 	return inserted, err

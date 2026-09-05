@@ -2,13 +2,130 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"regexp"
 
 	"centipede/internal/modules/docmost/domain"
+
+	"github.com/jackc/pgx/v5"
 )
 
 type NotificationDelivery struct {
 	ID     string
 	UserID string
+}
+
+type pageUserMention struct {
+	UserID    string
+	MentionID string
+	CreatorID string
+}
+
+var notificationUUIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// CreatePageMentionNotifications creates direct in-app notifications for new
+// user mentions found in the current page content. Mention IDs make the
+// operation idempotent when collaboration persistence is retried.
+func (repository *Repository) CreatePageMentionNotifications(ctx context.Context, pageID, workspaceID, actorID string, content []byte) ([]NotificationDelivery, error) {
+	mentions := extractPageUserMentions(content, actorID)
+	deliveries := make([]NotificationDelivery, 0, len(mentions))
+	for _, mention := range mentions {
+		if !notificationUUIDPattern.MatchString(mention.UserID) ||
+			!notificationUUIDPattern.MatchString(mention.CreatorID) {
+			continue
+		}
+		var delivery NotificationDelivery
+		err := repository.db.QueryRow(ctx, `
+INSERT INTO notifications (user_id, workspace_id, type, actor_id, page_id, space_id, data)
+SELECT $1, p.workspace_id, 'page.user_mention', $3::uuid, p.id, p.space_id,
+       jsonb_build_object('mentionId', $4::text)
+FROM pages p
+JOIN spaces s ON s.id = p.space_id AND s.deleted_at IS NULL
+JOIN users u ON u.id = $1 AND u.workspace_id = p.workspace_id
+WHERE p.id = $2 AND p.workspace_id = $5 AND p.deleted_at IS NULL
+  AND u.deleted_at IS NULL AND u.deactivated_at IS NULL
+  AND u.id <> $3::uuid
+  AND COALESCE(u.settings->'notifications'->>'page.userMention', 'true') <> 'false'
+  AND (s.visibility = 'public'
+    OR EXISTS (SELECT 1 FROM space_members sm WHERE sm.space_id = s.id
+               AND sm.user_id = u.id AND sm.deleted_at IS NULL)
+    OR EXISTS (SELECT 1 FROM space_members sm JOIN group_users gu ON gu.group_id = sm.group_id
+               WHERE sm.space_id = s.id AND gu.user_id = u.id AND sm.deleted_at IS NULL))
+  AND NOT EXISTS (
+    WITH RECURSIVE ancestors AS (
+      SELECT id, parent_page_id, ARRAY[id] AS visited
+      FROM pages WHERE id = p.id AND workspace_id = p.workspace_id AND deleted_at IS NULL
+      UNION ALL
+      SELECT parent.id, parent.parent_page_id, a.visited || parent.id
+      FROM pages parent JOIN ancestors a ON parent.id = a.parent_page_id
+      WHERE parent.workspace_id = p.workspace_id AND NOT parent.id = ANY(a.visited)
+    )
+    SELECT 1 FROM ancestors a
+    JOIN page_access pa ON pa.page_id = a.id
+    WHERE NOT EXISTS (
+      SELECT 1 FROM page_permissions pp
+      WHERE pp.page_access_id = pa.id
+        AND (pp.user_id = u.id OR pp.group_id IN (
+          SELECT gu.group_id FROM group_users gu WHERE gu.user_id = u.id
+        ))
+    )
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM notifications n
+    WHERE n.user_id = u.id AND n.workspace_id = p.workspace_id
+      AND n.type = 'page.user_mention' AND n.page_id = p.id
+      AND n.data->>'mentionId' = $4
+  )
+RETURNING id::text, user_id::text`, mention.UserID, pageID, mention.CreatorID, mention.MentionID, workspaceID).Scan(&delivery.ID, &delivery.UserID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		deliveries = append(deliveries, delivery)
+	}
+	return deliveries, nil
+}
+
+func extractPageUserMentions(content []byte, fallbackCreatorID string) []pageUserMention {
+	var root any
+	if json.Unmarshal(content, &root) != nil {
+		return nil
+	}
+	result := make([]pageUserMention, 0)
+	seen := make(map[string]struct{})
+	var walk func(any)
+	walk = func(value any) {
+		node, ok := value.(map[string]any)
+		if !ok {
+			return
+		}
+		if node["type"] == "mention" {
+			attrs, _ := node["attrs"].(map[string]any)
+			entityType, _ := attrs["entityType"].(string)
+			userID, _ := attrs["entityId"].(string)
+			mentionID, _ := attrs["id"].(string)
+			creatorID, _ := attrs["creatorId"].(string)
+			if entityType == "user" && userID != "" && mentionID != "" {
+				if creatorID == "" {
+					creatorID = fallbackCreatorID
+				}
+				if _, exists := seen[mentionID]; !exists {
+					seen[mentionID] = struct{}{}
+					result = append(result, pageUserMention{UserID: userID, MentionID: mentionID, CreatorID: creatorID})
+				}
+			}
+		}
+		if children, ok := node["content"].([]any); ok {
+			for _, child := range children {
+				walk(child)
+			}
+		}
+	}
+	walk(root)
+	return result
 }
 
 // CreatePageUpdateNotifications creates the local in-app notifications that

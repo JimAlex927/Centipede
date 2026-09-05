@@ -222,7 +222,7 @@ func TestPageUpdateNotificationsIntegration(t *testing.T) {
 	defer pool.Close()
 	if _, err := pool.Exec(ctx, `
 CREATE TEMP TABLE pages(
-  id uuid, workspace_id uuid, space_id uuid, deleted_at timestamptz
+  id uuid, parent_page_id uuid, workspace_id uuid, space_id uuid, deleted_at timestamptz
 );
 CREATE TEMP TABLE spaces(
   id uuid, deleted_at timestamptz, visibility text
@@ -239,13 +239,16 @@ CREATE TEMP TABLE space_members(
   space_id uuid, user_id uuid, group_id uuid, deleted_at timestamptz
 );
 CREATE TEMP TABLE group_users(group_id uuid, user_id uuid);
+CREATE TEMP TABLE page_access(id uuid, page_id uuid);
+CREATE TEMP TABLE page_permissions(id uuid, page_access_id uuid, user_id uuid, group_id uuid);
 CREATE TEMP TABLE notifications(
   id text DEFAULT 'notification', user_id uuid, workspace_id uuid,
-  type text, actor_id uuid, page_id uuid, space_id uuid,
+  type text, actor_id uuid, page_id uuid, space_id uuid, data jsonb,
   created_at timestamptz DEFAULT now()
 );
 INSERT INTO pages VALUES
   ('00000000-0000-0000-0000-000000000101',
+   NULL,
    '00000000-0000-0000-0000-000000000102',
    '00000000-0000-0000-0000-000000000103', NULL);
 INSERT INTO spaces VALUES
@@ -274,6 +277,21 @@ INSERT INTO watchers VALUES
 	}
 	if len(deliveries) != 1 || deliveries[0].UserID != "00000000-0000-0000-0000-000000000111" {
 		t.Fatalf("page update deliveries = %#v, want one watcher delivery", deliveries)
+	}
+	mentionContent := []byte(`{"type":"doc","content":[{"type":"paragraph","content":[{"type":"mention","attrs":{"id":"00000000-0000-0000-0000-000000000121","entityType":"user","entityId":"00000000-0000-0000-0000-000000000111","creatorId":"00000000-0000-0000-0000-000000000112"}}]}]}`)
+	mentionDeliveries, err := repository.CreatePageMentionNotifications(ctx, "00000000-0000-0000-0000-000000000101", "00000000-0000-0000-0000-000000000102", actorID, mentionContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mentionDeliveries) != 1 || mentionDeliveries[0].UserID != "00000000-0000-0000-0000-000000000111" {
+		t.Fatalf("page mention deliveries = %#v, want one direct notification", mentionDeliveries)
+	}
+	duplicateMentionDeliveries, err := repository.CreatePageMentionNotifications(ctx, "00000000-0000-0000-0000-000000000101", "00000000-0000-0000-0000-000000000102", actorID, mentionContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(duplicateMentionDeliveries) != 0 {
+		t.Fatalf("page mention retry delivered %d duplicate notifications", len(duplicateMentionDeliveries))
 	}
 	second, err := repository.CreatePageUpdateNotifications(
 		ctx,
