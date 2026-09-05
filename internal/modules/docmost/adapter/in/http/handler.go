@@ -27,6 +27,11 @@ type Handler struct {
 	mailer       application.Mailer
 	storage      application.Storage
 	maxUpload    int64
+	realtime     *RealtimeHandler
+}
+
+func (handler *Handler) SetRealtimeHandler(realtime *RealtimeHandler) {
+	handler.realtime = realtime
 }
 
 type principal struct {

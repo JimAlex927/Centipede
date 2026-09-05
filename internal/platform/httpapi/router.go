@@ -37,8 +37,9 @@ func NewRouter(cfg config.Config, database *pgxpool.Pool, logger *zap.Logger) ht
 	if err != nil {
 		panic(err)
 	}
+	docmostRepository := docmostpostgres.New(database)
 	docmostHandler := docmosthttp.NewHandler(
-		docmostpostgres.New(database),
+		docmostRepository,
 		cfg.Auth.JWTSecret,
 		cfg.Auth.RefreshTokenTTL,
 		cfg.Auth.CookieSecure,
@@ -48,9 +49,10 @@ func NewRouter(cfg config.Config, database *pgxpool.Pool, logger *zap.Logger) ht
 		attachmentStorage,
 		cfg.Storage.MaxUploadBytes,
 	)
-	collaborationHandler := docmosthttp.NewCollaborationHandler(docmostpostgres.New(database), cfg.Auth.JWTSecret, cfg.Server.CORSOrigins)
+	collaborationHandler := docmosthttp.NewCollaborationHandler(docmostRepository, cfg.Auth.JWTSecret, cfg.Server.CORSOrigins)
 	engine.Any("/collab/:room", gin.WrapH(collaborationHandler))
-	realtimeHandler := docmosthttp.NewRealtimeHandler(docmostpostgres.New(database), cfg.Auth.JWTSecret, cfg.Server.CORSOrigins)
+	realtimeHandler := docmosthttp.NewRealtimeHandler(docmostRepository, cfg.Auth.JWTSecret, cfg.Server.CORSOrigins)
+	docmostHandler.SetRealtimeHandler(realtimeHandler)
 	engine.GET("/realtime", gin.WrapH(realtimeHandler))
 	docmostHandler.Register(engine)
 	if cfg.Migration.LegacyBaseURL != "" {

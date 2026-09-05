@@ -121,6 +121,20 @@ func (handler *RealtimeHandler) ServeHTTP(response http.ResponseWriter, request 
 	}
 }
 
+// PublishSpaceEvent sends an event to every currently connected member of a
+// space. REST handlers use it for events that are produced by the server (for
+// example comment mutations), while tree mutations can still use the inbound
+// client event path for now.
+func (handler *RealtimeHandler) PublishSpaceEvent(workspaceID, spaceID string, data any) {
+	handler.hub.broadcastToSpace(workspaceID, spaceID, realtimeEnvelope{Event: "message", Data: marshalRealtimeData(data)}, nil)
+}
+
+// PublishNotification targets one user's open tabs. The frontend listens for
+// the notification event to invalidate its notification query.
+func (handler *RealtimeHandler) PublishNotification(workspaceID, userID string, data any) {
+	handler.hub.broadcastToUser(workspaceID, userID, realtimeEnvelope{Event: "notification", Data: marshalRealtimeData(data)})
+}
+
 func (handler *RealtimeHandler) authenticate(request *http.Request) (*realtimeClient, bool) {
 	cookie, err := request.Cookie("authToken")
 	if err != nil || strings.TrimSpace(cookie.Value) == "" {
@@ -167,10 +181,14 @@ func (hub *realtimeHub) remove(client *realtimeClient) {
 }
 
 func (hub *realtimeHub) broadcast(sender *realtimeClient, envelope realtimeEnvelope, spaceID string) {
+	hub.broadcastToSpace(sender.workspace, spaceID, envelope, sender)
+}
+
+func (hub *realtimeHub) broadcastToSpace(workspaceID, spaceID string, envelope realtimeEnvelope, excluded *realtimeClient) {
 	hub.mu.RLock()
 	clients := make([]*realtimeClient, 0, len(hub.clients))
 	for client := range hub.clients {
-		if client != sender && client.workspace == sender.workspace {
+		if client != excluded && client.workspace == workspaceID {
 			clients = append(clients, client)
 		}
 	}
@@ -186,6 +204,33 @@ func (hub *realtimeHub) broadcast(sender *realtimeClient, envelope realtimeEnvel
 		}
 		_ = client.write(payload)
 	}
+}
+
+func (hub *realtimeHub) broadcastToUser(workspaceID, userID string, envelope realtimeEnvelope) {
+	hub.mu.RLock()
+	clients := make([]*realtimeClient, 0, len(hub.clients))
+	for client := range hub.clients {
+		if client.workspace == workspaceID && client.userID == userID {
+			clients = append(clients, client)
+		}
+	}
+	hub.mu.RUnlock()
+
+	payload, err := json.Marshal(envelope)
+	if err != nil {
+		return
+	}
+	for _, client := range clients {
+		_ = client.write(payload)
+	}
+}
+
+func marshalRealtimeData(data any) json.RawMessage {
+	payload, err := json.Marshal(data)
+	if err != nil {
+		return json.RawMessage("null")
+	}
+	return payload
 }
 
 func (hub *realtimeHub) canAccessSpace(client *realtimeClient, spaceID string) bool {

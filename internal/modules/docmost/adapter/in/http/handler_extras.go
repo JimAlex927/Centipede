@@ -444,6 +444,13 @@ func (handler *Handler) createComment(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, "Failed to create comment")
 		return
 	}
+	if handler.realtime != nil {
+		handler.realtime.PublishSpaceEvent(current.Workspace.ID, page.SpaceID, gin.H{
+			"operation": "commentCreated",
+			"pageId":    page.ID,
+			"comment":   comment,
+		})
+	}
 	writeData(c, http.StatusOK, comment)
 }
 
@@ -457,6 +464,15 @@ func (handler *Handler) updateComment(c *gin.Context) {
 	if err != nil {
 		handler.writeRepositoryError(c, err, "Comment not found")
 		return
+	}
+	if handler.realtime != nil {
+		if page, pageErr := handler.repository.PageByID(c.Request.Context(), comment.PageID, "", current.Workspace.ID, false); pageErr == nil {
+			handler.realtime.PublishSpaceEvent(current.Workspace.ID, page.SpaceID, gin.H{
+				"operation": "commentUpdated",
+				"pageId":    comment.PageID,
+				"comment":   comment,
+			})
+		}
 	}
 	writeData(c, http.StatusOK, comment)
 }
@@ -481,6 +497,13 @@ func (handler *Handler) resolveComment(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, "Failed to resolve comment")
 		return
 	}
+	if handler.realtime != nil {
+		handler.realtime.PublishSpaceEvent(current.Workspace.ID, page.SpaceID, gin.H{
+			"operation": "commentUpdated",
+			"pageId":    comment.PageID,
+			"comment":   comment,
+		})
+	}
 	writeData(c, http.StatusOK, comment)
 }
 
@@ -490,9 +513,23 @@ func (handler *Handler) deleteComment(c *gin.Context) {
 		return
 	}
 	current := currentPrincipal(c)
+	comment, commentErr := handler.repository.CommentByID(c.Request.Context(), request.CommentID, current.Workspace.ID)
+	var spaceID string
+	if commentErr == nil {
+		if page, pageErr := handler.repository.PageByID(c.Request.Context(), comment.PageID, "", current.Workspace.ID, false); pageErr == nil {
+			spaceID = page.SpaceID
+		}
+	}
 	if err := handler.repository.DeleteComment(c.Request.Context(), request.CommentID, current.Workspace.ID, current.User.ID, isAdmin(current.User)); err != nil {
 		handler.writeRepositoryError(c, err, "Comment not found")
 		return
+	}
+	if handler.realtime != nil && spaceID != "" && commentErr == nil {
+		handler.realtime.PublishSpaceEvent(current.Workspace.ID, spaceID, gin.H{
+			"operation": "commentDeleted",
+			"pageId":    comment.PageID,
+			"commentId": comment.ID,
+		})
 	}
 	writeData(c, http.StatusOK, nil)
 }
