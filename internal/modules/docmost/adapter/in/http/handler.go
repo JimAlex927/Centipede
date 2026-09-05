@@ -471,6 +471,7 @@ func (handler *Handler) updateWorkspace(c *gin.Context) {
 		EnforceMFA          *bool           `json:"enforceMfa"`
 		AllowPersonalSpaces *bool           `json:"allowPersonalSpaces"`
 		IsSCIMEnabled       *bool           `json:"isScimEnabled"`
+		EnforceSSO          *bool           `json:"enforceSso"`
 	}
 	if !decode(c, &request) {
 		return
@@ -488,9 +489,12 @@ func (handler *Handler) updateWorkspace(c *gin.Context) {
 	if request.IsSCIMEnabled != nil && *request.IsSCIMEnabled && !handler.requireFeature(c, "scim") {
 		return
 	}
+	if request.EnforceSSO != nil && *request.EnforceSSO && !handler.requireFeature(c, "sso:custom") {
+		return
+	}
 	workspace, err := handler.repository.UpdateWorkspace(c.Request.Context(), current.Workspace.ID, postgres.WorkspaceUpdate{
 		Name: request.Name, Description: request.Description, Logo: request.Logo,
-		Hostname: request.Hostname, Settings: settings, EnforceMFA: request.EnforceMFA, IsSCIMEnabled: request.IsSCIMEnabled,
+		Hostname: request.Hostname, Settings: settings, EnforceMFA: request.EnforceMFA, IsSCIMEnabled: request.IsSCIMEnabled, EnforceSSO: request.EnforceSSO,
 	})
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, "Failed to update workspace")
