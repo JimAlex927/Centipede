@@ -696,7 +696,7 @@ func (handler *Handler) sidebarPages(c *gin.Context) {
 		return
 	}
 	current := currentPrincipal(c)
-	result, err := handler.repository.Pages(c.Request.Context(), current.Workspace.ID, postgres.PageListFilter{SpaceID: request.SpaceID, ParentPageID: nonEmptyPointer(request.PageID), Limit: request.Limit})
+	result, err := handler.repository.Pages(c.Request.Context(), current.Workspace.ID, postgres.PageListFilter{ViewerID: current.User.ID, ViewerAdmin: isAdmin(current.User), SpaceID: request.SpaceID, ParentPageID: nonEmptyPointer(request.PageID), Limit: request.Limit})
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, "Failed to load pages")
 		return
@@ -710,7 +710,7 @@ func (handler *Handler) recentPages(c *gin.Context) {
 		return
 	}
 	current := currentPrincipal(c)
-	result, err := handler.repository.Pages(c.Request.Context(), current.Workspace.ID, postgres.PageListFilter{SpaceID: request.SpaceID, Recent: true, Limit: request.Limit})
+	result, err := handler.repository.Pages(c.Request.Context(), current.Workspace.ID, postgres.PageListFilter{ViewerID: current.User.ID, ViewerAdmin: isAdmin(current.User), SpaceID: request.SpaceID, Recent: true, Limit: request.Limit})
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, "Failed to load recent pages")
 		return
@@ -728,7 +728,7 @@ func (handler *Handler) createdByUser(c *gin.Context) {
 	if creatorID == nil {
 		creatorID = &current.User.ID
 	}
-	result, err := handler.repository.Pages(c.Request.Context(), current.Workspace.ID, postgres.PageListFilter{SpaceID: request.SpaceID, CreatorID: creatorID, Recent: true, Limit: request.Limit})
+	result, err := handler.repository.Pages(c.Request.Context(), current.Workspace.ID, postgres.PageListFilter{ViewerID: current.User.ID, ViewerAdmin: isAdmin(current.User), SpaceID: request.SpaceID, CreatorID: creatorID, Recent: true, Limit: request.Limit})
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, "Failed to load pages")
 		return
@@ -742,7 +742,7 @@ func (handler *Handler) trashPages(c *gin.Context) {
 		return
 	}
 	current := currentPrincipal(c)
-	result, err := handler.repository.Pages(c.Request.Context(), current.Workspace.ID, postgres.PageListFilter{SpaceID: request.SpaceID, Deleted: true, Recent: true, Limit: request.Limit})
+	result, err := handler.repository.Pages(c.Request.Context(), current.Workspace.ID, postgres.PageListFilter{ViewerID: current.User.ID, ViewerAdmin: isAdmin(current.User), SpaceID: request.SpaceID, Deleted: true, Recent: true, Limit: request.Limit})
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, "Failed to load trash")
 		return

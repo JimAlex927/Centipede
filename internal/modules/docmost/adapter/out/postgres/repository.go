@@ -601,6 +601,8 @@ UPDATE pages SET space_id = $3, updated_at = now() WHERE id IN (SELECT id FROM d
 }
 
 type PageListFilter struct {
+	ViewerID     string
+	ViewerAdmin  bool
 	SpaceID      *string
 	ParentPageID *string
 	CreatorID    *string
@@ -614,12 +616,13 @@ func (repository *Repository) Pages(ctx context.Context, workspaceID string, fil
 	rows, err := repository.db.Query(ctx, `
 SELECT `+pageColumns+` FROM pages p `+pageJoins+`
 WHERE p.workspace_id = $1
+  AND `+pageListAccessSQL+`
   AND ($2::uuid IS NULL OR p.space_id = $2)
   AND ($3::uuid IS NULL OR p.parent_page_id = $3)
   AND ($4::uuid IS NULL OR p.creator_id = $4)
   AND (($5 AND p.deleted_at IS NOT NULL) OR (NOT $5 AND p.deleted_at IS NULL))
 ORDER BY CASE WHEN $6 THEN p.updated_at END DESC, CASE WHEN NOT $6 THEN p.position END NULLS LAST, p.created_at
-LIMIT $7`, workspaceID, filter.SpaceID, filter.ParentPageID, filter.CreatorID, filter.Deleted, filter.Recent, limit)
+LIMIT $7`, workspaceID, filter.SpaceID, filter.ParentPageID, filter.CreatorID, filter.Deleted, filter.Recent, limit, filter.ViewerID, filter.ViewerAdmin)
 	if err != nil {
 		return domain.Pagination[domain.Page]{}, err
 	}

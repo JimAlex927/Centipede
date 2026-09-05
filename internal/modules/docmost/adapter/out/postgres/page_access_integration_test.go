@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -71,4 +72,35 @@ func TestPageAccessIntegration(t *testing.T) {
 	check("child", "workspace", PageAccessResult{HasRestriction: true}, false)
 	exec(`UPDATE pages SET deleted_at=now() WHERE id='child';`)
 	check("child", "workspace", PageAccessResult{}, true)
+
+	exec(`ALTER TABLE pages ADD COLUMN space_id text DEFAULT 'space';
+ CREATE TEMP TABLE spaces(id text, workspace_id text, visibility text, deleted_at timestamptz);
+ CREATE TEMP TABLE space_members(space_id text, user_id text, group_id text, deleted_at timestamptz);
+ INSERT INTO spaces VALUES ('space','workspace','private',NULL);
+ UPDATE pages SET deleted_at=NULL, parent_page_id=NULL WHERE id='root';
+ UPDATE pages SET deleted_at=NULL WHERE id='child';`)
+	predicate := strings.NewReplacer("$8", "$1", "$9", "$2").Replace(pageListAccessSQL)
+	listCheck := func(admin bool, count int) {
+		t.Helper()
+		var got int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM pages p WHERE `+predicate, "user", admin).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != count {
+			t.Fatalf("visible page count %d, want %d (admin=%v)", got, count, admin)
+		}
+	}
+	listCheck(false, 0)
+	listCheck(true, 0) // Workspace admin does not bypass the root restriction.
+	exec(`INSERT INTO page_permissions VALUES ('root-grant','root-access','user',NULL,'reader');`)
+	listCheck(false, 0) // Page grant alone does not grant private space membership.
+	listCheck(true, 2)
+	exec(`INSERT INTO space_members VALUES ('space',NULL,'group',NULL);`)
+	listCheck(false, 2)
+	exec(`UPDATE space_members SET deleted_at=now();`)
+	listCheck(false, 0)
+	exec(`UPDATE spaces SET visibility='public';`)
+	listCheck(false, 2)
+	exec(`UPDATE spaces SET deleted_at=now();`)
+	listCheck(true, 0)
 }
