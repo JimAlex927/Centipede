@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"centipede/internal/modules/docmost/adapter/out/postgres"
+	"centipede/internal/modules/docmost/domain"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
@@ -85,6 +86,9 @@ func (handler *Handler) createInvitations(c *gin.Context) {
 		}
 		return
 	}
+	for _, invitation := range created {
+		handler.sendInvitationEmail(c, invitation)
+	}
 	writeData(c, http.StatusOK, created)
 }
 
@@ -98,12 +102,12 @@ func (handler *Handler) resendInvitation(c *gin.Context) {
 		writeError(c, http.StatusForbidden, "Forbidden")
 		return
 	}
-	if _, err := handler.repository.InvitationToken(c.Request.Context(), request.InvitationID, current.Workspace.ID); err != nil {
+	invitation, err := handler.repository.InvitationByID(c.Request.Context(), request.InvitationID, current.Workspace.ID)
+	if err != nil {
 		handler.writeRepositoryError(c, err, "Invitation not found")
 		return
 	}
-	// The invitation remains valid. Delivery is handled by the mail adapter;
-	// self-hosted administrators can always retrieve the link explicitly.
+	handler.sendInvitationEmail(c, invitation)
 	writeData(c, http.StatusOK, nil)
 }
 
@@ -229,10 +233,23 @@ func (handler *Handler) forgotPassword(c *gin.Context) {
 	}
 	user, err := handler.repository.UserByEmail(c.Request.Context(), request.Email, workspace.ID)
 	if err == nil && user.DeactivatedAt == nil && user.DeletedAt == nil {
-		_, _ = handler.repository.CreatePasswordResetToken(c.Request.Context(), user.ID, workspace.ID, time.Now().UTC().Add(30*time.Minute))
+		token, tokenErr := handler.repository.CreatePasswordResetToken(c.Request.Context(), user.ID, workspace.ID, time.Now().UTC().Add(30*time.Minute))
+		if tokenErr == nil && handler.mailer != nil {
+			link := handler.publicFrontendURL(c) + "/password-reset?token=" + url.QueryEscape(token)
+			_ = handler.mailer.Send(c.Request.Context(), user.Email, "Reset your password", "Use this link to reset your password:\n\n"+link+"\n\nThis link expires in 30 minutes.")
+		}
 	}
 	// Always return the same response to prevent account enumeration.
 	writeData(c, http.StatusOK, nil)
+}
+
+func (handler *Handler) sendInvitationEmail(c *gin.Context, invitation domain.Invitation) {
+	if handler.mailer == nil || strings.TrimSpace(invitation.Email) == "" {
+		return
+	}
+	link := handler.publicFrontendURL(c) + "/invites/" + url.PathEscape(invitation.ID) + "?token=" + url.QueryEscape(invitation.Token)
+	message := "You have been invited to join a Docmost workspace.\n\nAccept the invitation here:\n" + link + "\n\nYour assigned role: " + invitation.Role
+	_ = handler.mailer.Send(c.Request.Context(), invitation.Email, "You are invited to Docmost", message)
 }
 
 func (handler *Handler) verifyUserToken(c *gin.Context) {
