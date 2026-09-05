@@ -13,10 +13,10 @@ type DatabasePinger interface {
 }
 
 func Register(router gin.IRouter, database DatabasePinger, environment string) {
-	router.GET("/health/live", func(c *gin.Context) {
+	live := func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok", "environment": environment})
-	})
-	router.GET("/health/ready", func(c *gin.Context) {
+	}
+	readiness := func(c *gin.Context) {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), time.Second)
 		defer cancel()
 		if err := database.Ping(ctx); err != nil {
@@ -26,5 +26,12 @@ func Register(router gin.IRouter, database DatabasePinger, environment string) {
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
-	})
+	}
+
+	router.GET("/health/live", live)
+	router.GET("/health/ready", readiness)
+	// Keep the upstream Docmost health paths available for existing probes.
+	router.GET("/api/health", readiness)
+	router.GET("/api/health/live", live)
+	router.GET("/api/health/ready", readiness)
 }

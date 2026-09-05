@@ -37,3 +37,17 @@ func TestReadiness(t *testing.T) {
 		})
 	}
 }
+
+func TestDocmostHealthAliases(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	Register(router, fakePinger{}, "test")
+	for _, path := range []string{"/api/health", "/api/health/live", "/api/health/ready"} {
+		response := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		router.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s: expected 200, got %d", path, response.Code)
+		}
+	}
+}
