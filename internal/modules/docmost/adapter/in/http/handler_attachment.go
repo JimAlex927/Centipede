@@ -79,7 +79,10 @@ func (handler *Handler) uploadFile(c *gin.Context) {
 			return
 		}
 	}
-	relativePath := path.Join("file", current.Workspace.ID, attachmentID, fileName)
+	// Keep the storage layout compatible with Docmost Node. Existing records
+	// keep using their persisted filePath; new uploads must be readable by both
+	// the Go service and a temporarily retained Node service.
+	relativePath := path.Join(current.Workspace.ID, "files", attachmentID, fileName)
 	if existing != nil {
 		relativePath = existing.FilePath
 	}
@@ -114,7 +117,10 @@ func (handler *Handler) uploadFile(c *gin.Context) {
 		return
 	}
 	attachment.URL = handler.fileURL(c, attachment)
-	writeData(c, http.StatusOK, attachment)
+	// The upstream upload endpoint returns the attachment itself, rather than
+	// the API envelope used by most JSON endpoints. The editor upload helpers
+	// intentionally consume attachment.id/fileName/fileSize directly.
+	c.JSON(http.StatusOK, attachment)
 }
 
 func (handler *Handler) uploadImage(c *gin.Context) {
@@ -174,7 +180,12 @@ func (handler *Handler) uploadImage(c *gin.Context) {
 		return
 	}
 	fileName := attachmentID + extension
-	relativePath := path.Join(attachmentType, current.Workspace.ID, fileName)
+	imageFolder := map[string]string{
+		"avatar":         "avatars",
+		"space-icon":     "space-logos",
+		"workspace-icon": "workspace-logos",
+	}[attachmentType]
+	relativePath := path.Join(current.Workspace.ID, imageFolder, fileName)
 	if _, err = file.Seek(0, io.SeekStart); err != nil {
 		writeError(c, http.StatusBadRequest, "Failed to read uploaded image")
 		return
@@ -213,7 +224,10 @@ func (handler *Handler) uploadImage(c *gin.Context) {
 		writeError(c, http.StatusInternalServerError, "Failed to update image reference")
 		return
 	}
-	writeData(c, http.StatusOK, attachment)
+	// Match Node's upload-image response shape. In particular, do not wrap the
+	// attachment in {data, success, status}; uploadIcon returns this value
+	// directly to the editor/settings code.
+	c.JSON(http.StatusOK, attachment)
 }
 
 func (handler *Handler) attachmentInfo(c *gin.Context) {
