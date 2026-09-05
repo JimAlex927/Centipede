@@ -86,19 +86,42 @@ func (repository *Repository) RestrictPage(ctx context.Context, pageID, workspac
 	if err != nil {
 		return err
 	}
-	result, err := repository.db.Exec(ctx, `
+	tx, err := repository.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var accessID string
+	err = tx.QueryRow(ctx, `
 INSERT INTO page_access (id, page_id, workspace_id, space_id, access_level, creator_id)
 SELECT $1, p.id, p.workspace_id, p.space_id, 'restricted', $4
 FROM pages p
 WHERE p.id = $2 AND p.workspace_id = $3 AND p.deleted_at IS NULL
-ON CONFLICT (page_id) DO UPDATE SET updated_at = now()`, id, pageID, workspaceID, creatorID)
-	if err != nil {
+
+ON CONFLICT (page_id) DO NOTHING
+RETURNING id::text`, id, pageID, workspaceID, creatorID).Scan(&accessID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		if err = tx.QueryRow(ctx, `SELECT id::text FROM page_access WHERE page_id = $1 AND workspace_id = $2`, pageID, workspaceID).Scan(&accessID); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return err
+		}
+	} else if err != nil {
 		return err
+	} else {
+		permissionID, idErr := newUUID()
+		if idErr != nil {
+			return idErr
+		}
+		if _, err = tx.Exec(ctx, `
+INSERT INTO page_permissions (id, page_access_id, user_id, role, added_by_id)
+VALUES ($1, $2, $3, 'writer', $3)
+ON CONFLICT (page_access_id, user_id) DO UPDATE SET role = 'writer', updated_at = now()`, permissionID, accessID, creatorID); err != nil {
+			return err
+		}
 	}
-	if result.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 func (repository *Repository) RemovePageRestriction(ctx context.Context, pageID, workspaceID string) error {

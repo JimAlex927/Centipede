@@ -103,6 +103,10 @@ INSERT INTO groups VALUES ('00000000-0000-0000-0000-000000000021', 'Editors', fa
 	if err != nil || !restriction.Direct || restriction.RestrictionID == "" {
 		t.Fatalf("unexpected restriction: %+v, %v", restriction, err)
 	}
+	members, err := repository.PagePermissionMembers(ctx, pageID, workspaceID, "", 10)
+	if err != nil || len(members.Items) != 1 || members.Items[0].ID != user1ID || members.Items[0].Role != "writer" {
+		t.Fatalf("restricting user did not receive writer access: %+v, %v", members, err)
+	}
 	if err := repository.AddPagePermissions(ctx, pageID, workspaceID, user1ID, "writer", []string{user1ID, user2ID}, []string{groupID}); err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +114,7 @@ INSERT INTO groups VALUES ('00000000-0000-0000-0000-000000000021', 'Editors', fa
 	if err := repository.UpdatePagePermissionRole(ctx, pageID, workspaceID, reader, &user2ID, nil); err != nil {
 		t.Fatal(err)
 	}
-	members, err := repository.PagePermissionMembers(ctx, pageID, workspaceID, "", 10)
+	members, err = repository.PagePermissionMembers(ctx, pageID, workspaceID, "", 10)
 	if err != nil || len(members.Items) != 3 {
 		t.Fatalf("unexpected members: %+v, %v", members, err)
 	}
