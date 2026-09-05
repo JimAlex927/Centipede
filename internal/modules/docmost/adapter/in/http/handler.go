@@ -135,6 +135,8 @@ func (handler *Handler) Register(router gin.IRouter) {
 	protected.POST("/pages/history", handler.pageHistory)
 	protected.POST("/pages/history/info", handler.pageHistoryInfo)
 	protected.POST("/pages/export", handler.exportPage)
+	protected.POST("/spaces/export", handler.exportSpace)
+	protected.POST("/docx-export", handler.exportDocx)
 	protected.POST("/pages/import", handler.importPage)
 	protected.POST("/pages/import-zip", handler.importZip)
 	protected.POST("/pages/transclusion/lookup", handler.transclusionLookup)
@@ -792,8 +794,8 @@ func (handler *Handler) version(c *gin.Context) {
 func (handler *Handler) migrationStatus(c *gin.Context) {
 	writeData(c, http.StatusOK, gin.H{
 		"runtime": "go", "nodeRequired": true,
-		"implemented": []string{"auth-core", "users", "workspace-core", "spaces-core", "pages-core", "groups-core", "comments-core", "search-core", "shared-page-search", "attachment-search", "shares-core", "local-attachments", "file-task-query", "notifications-core", "sessions", "page-history", "collaboration-core", "realtime-core", "transclusion-lookup", "page-access-core", "single-page-export", "markdown-html-import", "generic-zip-import"},
-		"pending":     []string{"docx-pdf-import", "notion-confluence-import", "zip-attachment-import", "export-zip", "docx-export", "transclusion-attachment-copy", "mail-delivery", "page-permissions-management", "shared-attachments", "docmost-schema-migrations", "database-integration-validation", "enterprise"},
+		"implemented": []string{"auth-core", "users", "workspace-core", "spaces-core", "pages-core", "groups-core", "comments-core", "search-core", "shared-page-search", "attachment-search", "shares-core", "local-attachments", "file-task-query", "notifications-core", "sessions", "page-history", "collaboration-core", "realtime-core", "transclusion-lookup", "page-access-core", "single-page-export", "archive-export", "docx-export", "markdown-html-import", "generic-zip-import"},
+		"pending":     []string{"docx-pdf-import", "notion-confluence-import", "zip-attachment-import", "export-attachments", "transclusion-attachment-copy", "mail-delivery", "page-permissions-management", "shared-attachments", "docmost-schema-migrations", "database-integration-validation", "enterprise"},
 	})
 }
 
