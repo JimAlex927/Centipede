@@ -996,6 +996,9 @@ type searchRequest struct {
 }
 
 func (handler *Handler) searchAttachments(c *gin.Context) {
+	if !handler.requireFeature(c, "attachment:indexing") {
+		return
+	}
 	var request searchRequest
 	if !decodeOptional(c, &request) {
 		return
