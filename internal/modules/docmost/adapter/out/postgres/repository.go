@@ -520,6 +520,9 @@ VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $10, $11, $12)`,
 	if err != nil {
 		return domain.Page{}, err
 	}
+	// Backlinks are derived data and should also be initialized for imported or
+	// API-created pages that do not pass through the collaboration server.
+	_ = repository.SyncBacklinks(ctx, id, workspaceID, content)
 	return repository.PageByID(ctx, id, "", workspaceID, false)
 }
 
@@ -552,6 +555,12 @@ WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`, id, workspaceID, us
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return domain.Page{}, err
+	}
+	if len(input.Content) > 0 {
+		// Keep content writes consistent with collaboration saves. This is
+		// intentionally best-effort because backlinks are rebuildable derived
+		// data and must not make the page mutation appear to have failed.
+		_ = repository.SyncBacklinks(ctx, id, workspaceID, input.Content)
 	}
 	return repository.PageByID(ctx, id, "", workspaceID, false)
 }
