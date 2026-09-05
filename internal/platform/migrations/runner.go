@@ -75,6 +75,9 @@ func AdoptExisting(ctx context.Context, pool *pgxpool.Pool, directory, version s
 	if _, err := os.Stat(filepath.Join(directory, version)); err != nil {
 		return fmt.Errorf("read adoption baseline %s: %w", version, err)
 	}
+	if err := ValidateExisting(ctx, pool); err != nil {
+		return err
+	}
 	if _, err := pool.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			version TEXT PRIMARY KEY,
@@ -84,6 +87,16 @@ func AdoptExisting(ctx context.Context, pool *pgxpool.Pool, directory, version s
 		return fmt.Errorf("create schema_migrations: %w", err)
 	}
 
+	if _, err := pool.Exec(ctx, `INSERT INTO schema_migrations (version) VALUES ($1) ON CONFLICT (version) DO NOTHING`, version); err != nil {
+		return fmt.Errorf("record adopted baseline: %w", err)
+	}
+	return nil
+}
+
+// ValidateExisting verifies that an already migrated Docmost database has the
+// structures required by the Go service. It is deliberately read-only and can
+// be used as a preflight check before adopting the schema bookkeeping.
+func ValidateExisting(ctx context.Context, pool *pgxpool.Pool) error {
 	missing := make([]string, 0)
 	tables := make([]string, 0, len(docmostAdoptionSchema))
 	for table := range docmostAdoptionSchema {
@@ -118,15 +131,12 @@ func AdoptExisting(ctx context.Context, pool *pgxpool.Pool, directory, version s
 	if len(missing) > 0 {
 		return fmt.Errorf("existing database is missing Docmost schema elements: %s", strings.Join(missing, ", "))
 	}
-	var objectErr error
-	if missing, objectErr = missingDocmostObjects(ctx, pool); objectErr != nil {
-		return objectErr
+	missing, err := missingDocmostObjects(ctx, pool)
+	if err != nil {
+		return err
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("existing database is missing Docmost schema objects: %s", strings.Join(missing, ", "))
-	}
-	if _, err := pool.Exec(ctx, `INSERT INTO schema_migrations (version) VALUES ($1) ON CONFLICT (version) DO NOTHING`, version); err != nil {
-		return fmt.Errorf("record adopted baseline: %w", err)
 	}
 	return nil
 }

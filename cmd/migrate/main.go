@@ -19,6 +19,7 @@ import (
 func main() {
 	directory := flag.String("dir", "migrations", "directory containing SQL migrations")
 	adoptExisting := flag.Bool("adopt-existing", false, "adopt an already migrated Docmost database without executing the baseline SQL")
+	checkExisting := flag.Bool("check-existing", false, "validate an existing Docmost database without changing it")
 	flag.Parse()
 
 	cleanup, err := logger.Init(logger.WithLevel("info"), logger.WithFileEnable(false))
@@ -26,6 +27,10 @@ func main() {
 		panic(err)
 	}
 	defer cleanup()
+	if *adoptExisting && *checkExisting {
+		logger.Error("-adopt-existing and -check-existing cannot be used together")
+		os.Exit(2)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -42,7 +47,9 @@ func main() {
 	defer pool.Close()
 
 	var migrationErr error
-	if *adoptExisting {
+	if *checkExisting {
+		migrationErr = migrations.ValidateExisting(ctx, pool)
+	} else if *adoptExisting {
 		migrationErr = migrations.AdoptExisting(ctx, pool, *directory, "000001_docmost_baseline.sql")
 	} else {
 		migrationErr = migrations.Run(ctx, pool, *directory)
@@ -50,6 +57,10 @@ func main() {
 	if migrationErr != nil {
 		logger.Error("run migrations", zap.Error(migrationErr))
 		os.Exit(1)
+	}
+	if *checkExisting {
+		logger.Info("existing Docmost schema verified")
+		return
 	}
 	logger.Info("database migrations applied")
 }

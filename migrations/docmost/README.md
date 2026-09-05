@@ -20,6 +20,14 @@ go run ./cmd/api
 For an existing installation, first take a database backup and then run:
 
 ```powershell
+go run ./cmd/migrate -dir migrations/docmost -check-existing
+```
+
+The read-only preflight checks the required Docmost tables, columns, extensions,
+functions and page-search trigger without changing the database. If it passes,
+record the baseline with:
+
+```powershell
 go run ./cmd/migrate -dir migrations/docmost -adopt-existing
 ```
 
