@@ -463,12 +463,13 @@ func (handler *Handler) updateWorkspace(c *gin.Context) {
 		return
 	}
 	var request struct {
-		Name        *string         `json:"name"`
-		Description *string         `json:"description"`
-		Logo        *string         `json:"logo"`
-		Hostname    *string         `json:"hostname"`
-		Settings    json.RawMessage `json:"settings"`
-		EnforceMFA  *bool           `json:"enforceMfa"`
+		Name                *string         `json:"name"`
+		Description         *string         `json:"description"`
+		Logo                *string         `json:"logo"`
+		Hostname            *string         `json:"hostname"`
+		Settings            json.RawMessage `json:"settings"`
+		EnforceMFA          *bool           `json:"enforceMfa"`
+		AllowPersonalSpaces *bool           `json:"allowPersonalSpaces"`
 	}
 	if !decode(c, &request) {
 		return
@@ -476,9 +477,16 @@ func (handler *Handler) updateWorkspace(c *gin.Context) {
 	if request.EnforceMFA != nil && *request.EnforceMFA && !handler.requireFeature(c, "mfa") {
 		return
 	}
+	settings := request.Settings
+	if request.AllowPersonalSpaces != nil {
+		settings = setPersonalSpacesSetting(settings, *request.AllowPersonalSpaces)
+		if *request.AllowPersonalSpaces && !handler.requireFeature(c, "spaces:personal") {
+			return
+		}
+	}
 	workspace, err := handler.repository.UpdateWorkspace(c.Request.Context(), current.Workspace.ID, postgres.WorkspaceUpdate{
 		Name: request.Name, Description: request.Description, Logo: request.Logo,
-		Hostname: request.Hostname, Settings: request.Settings, EnforceMFA: request.EnforceMFA,
+		Hostname: request.Hostname, Settings: settings, EnforceMFA: request.EnforceMFA,
 	})
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, "Failed to update workspace")
