@@ -20,6 +20,7 @@ type Workspace struct {
 	DefaultRole        string          `json:"defaultRole"`
 	Plan               *string         `json:"plan"`
 	EnforceMFA         bool            `json:"enforceMfa"`
+	IsSCIMEnabled      bool            `json:"isScimEnabled"`
 	TrashRetentionDays int             `json:"trashRetentionDays"`
 	CreatedAt          time.Time       `json:"createdAt"`
 	UpdatedAt          time.Time       `json:"updatedAt"`

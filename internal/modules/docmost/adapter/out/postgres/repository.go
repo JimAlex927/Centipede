@@ -36,7 +36,7 @@ const workspaceColumns = `
 id::text, name, description, logo, hostname, default_space_id::text,
 custom_domain, COALESCE(settings, '{}'::jsonb), status,
 COALESCE(enforce_sso, false), COALESCE(email_domains, '{}'::varchar[]),
-COALESCE(default_role, 'member'), plan, COALESCE(enforce_mfa, false),
+COALESCE(default_role, 'member'), plan, COALESCE(enforce_mfa, false), COALESCE(is_scim_enabled, false),
 COALESCE(trash_retention_days, 30), created_at, updated_at`
 
 func scanWorkspace(row rowScanner) (domain.Workspace, error) {
@@ -45,7 +45,7 @@ func scanWorkspace(row rowScanner) (domain.Workspace, error) {
 		&value.ID, &value.Name, &value.Description, &value.Logo, &value.Hostname,
 		&value.DefaultSpaceID, &value.CustomDomain, &value.Settings, &value.Status,
 		&value.EnforceSSO, &value.EmailDomains, &value.DefaultRole, &value.Plan,
-		&value.EnforceMFA, &value.TrashRetentionDays, &value.CreatedAt, &value.UpdatedAt,
+		&value.EnforceMFA, &value.IsSCIMEnabled, &value.TrashRetentionDays, &value.CreatedAt, &value.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Workspace{}, ErrNotFound
@@ -259,12 +259,13 @@ WHERE id = $1 AND workspace_id = $2`, userID, workspaceID, input.Name, input.Loc
 }
 
 type WorkspaceUpdate struct {
-	Name        *string
-	Description *string
-	Logo        *string
-	Hostname    *string
-	Settings    json.RawMessage
-	EnforceMFA  *bool
+	Name          *string
+	Description   *string
+	Logo          *string
+	Hostname      *string
+	Settings      json.RawMessage
+	EnforceMFA    *bool
+	IsSCIMEnabled *bool
 }
 
 func (repository *Repository) UpdateWorkspace(ctx context.Context, workspaceID string, input WorkspaceUpdate) (domain.Workspace, error) {
@@ -272,8 +273,9 @@ func (repository *Repository) UpdateWorkspace(ctx context.Context, workspaceID s
 UPDATE workspaces SET
   name = COALESCE($2, name), description = COALESCE($3, description),
   logo = COALESCE($4, logo), hostname = COALESCE($5, hostname),
-  settings = COALESCE($6::jsonb, settings), enforce_mfa = COALESCE($7, enforce_mfa), updated_at = now()
-WHERE id = $1 AND deleted_at IS NULL`, workspaceID, input.Name, input.Description, input.Logo, input.Hostname, nullableJSON(input.Settings), input.EnforceMFA)
+  settings = COALESCE($6::jsonb, settings), enforce_mfa = COALESCE($7, enforce_mfa),
+  is_scim_enabled = COALESCE($8, is_scim_enabled), updated_at = now()
+WHERE id = $1 AND deleted_at IS NULL`, workspaceID, input.Name, input.Description, input.Logo, input.Hostname, nullableJSON(input.Settings), input.EnforceMFA, input.IsSCIMEnabled)
 	if err != nil {
 		return domain.Workspace{}, err
 	}
