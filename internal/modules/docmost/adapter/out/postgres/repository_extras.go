@@ -807,6 +807,27 @@ func (repository *Repository) Suggestions(ctx context.Context, workspaceID, quer
 }
 
 func (repository *Repository) CleanupExpiredSessions(ctx context.Context) error {
-	_, err := repository.db.Exec(ctx, `DELETE FROM user_sessions WHERE expires_at < $1 OR revoked_at < $2`, time.Now().UTC(), time.Now().UTC().Add(-7*24*time.Hour))
+	now := time.Now().UTC()
+	_, err := repository.db.Exec(ctx, `DELETE FROM user_sessions WHERE expires_at < $1 OR revoked_at < $2`, now, now.Add(-7*24*time.Hour))
+	return err
+}
+
+// TrimExcessSessions mirrors Docmost's session retention policy. Keep the
+// newest 25 active sessions for each user so repeated logins cannot grow the
+// table without bound. Expired and revoked rows are handled separately by
+// CleanupExpiredSessions.
+func (repository *Repository) TrimExcessSessions(ctx context.Context) error {
+	_, err := repository.db.Exec(ctx, `
+DELETE FROM user_sessions
+WHERE id IN (
+  SELECT id FROM (
+    SELECT id, row_number() OVER (
+      PARTITION BY user_id ORDER BY last_active_at DESC NULLS LAST, created_at DESC, id DESC
+    ) AS session_number
+    FROM user_sessions
+    WHERE revoked_at IS NULL AND expires_at > now()
+  ) active_sessions
+  WHERE session_number > 25
+)`)
 	return err
 }
