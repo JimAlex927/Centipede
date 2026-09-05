@@ -55,3 +55,41 @@ func TestServeAttachmentAllowsInlinePDFPreview(t *testing.T) {
 		t.Fatalf("Content-Disposition = %q, want no download disposition for PDF", got)
 	}
 }
+
+func TestServeAttachmentAllowsInlineSVGPreview(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	localStorage, err := storage.NewLocal(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const filePath = "workspace/files/attachment/diagram.drawio.svg"
+	if _, err = localStorage.Save(context.Background(), filePath, bytes.NewReader([]byte(`<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"/></svg>`)), 1024); err != nil {
+		t.Fatal(err)
+	}
+
+	mimeType := "image/svg+xml"
+	attachmentType := "file"
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(http.MethodGet, "/api/files/attachment/diagram.drawio.svg", nil)
+
+	handler := &Handler{storage: localStorage}
+	handler.serveAttachment(context, domain.Attachment{
+		FileName:  "diagram.drawio.svg",
+		FilePath:  filePath,
+		FileExt:   ".svg",
+		MimeType:  &mimeType,
+		Type:      &attachmentType,
+		UpdatedAt: time.Now().UTC(),
+	}, false)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	if got := recorder.Header().Get("Content-Type"); got != mimeType {
+		t.Fatalf("Content-Type = %q, want %q", got, mimeType)
+	}
+	if got := recorder.Header().Get("Content-Disposition"); got != "" {
+		t.Fatalf("Content-Disposition = %q, want no download disposition for SVG", got)
+	}
+}

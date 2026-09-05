@@ -93,7 +93,25 @@ export function getSpaceUrl(spaceSlug: string) {
 
 export function getFileUrl(src: string) {
   if (!src) return src;
-  if (src.startsWith("http")) return src;
+
+  const rawSrc = src.trim();
+  let parsed: URL;
+  try {
+    parsed = new URL(rawSrc, getAppUrl());
+  } catch {
+    return sanitizeUrl(src);
+  }
+  const sourceIsAbsolute = /^https?:\/\//i.test(rawSrc);
+  const sourcePath = parsed.pathname;
+  const suffix = `${parsed.search}${parsed.hash}`;
+
+  // Absolute URLs can be left over from the Node service or an older Go
+  // instance. Rewrite only known attachment paths, and only when the user
+  // configured a backend origin; unrelated external URLs must remain intact.
+  const configuredBackend = Boolean(
+    getConfigValue("API_BASE_URL") || getConfigValue("APP_URL"),
+  );
+  if (sourceIsAbsolute && !configuredBackend) return sanitizeUrl(src);
 
   // Older Go-imported pages can persist the storage path instead of the
   // public API path, for example:
@@ -101,29 +119,29 @@ export function getFileUrl(src: string) {
   // Keep those documents readable after switching away from the Node
   // monolith.  The workspace segment is intentionally discarded because
   // the protected file endpoint addresses attachments by id.
-  const storagePath = src.match(
+  const storagePath = sourcePath.match(
     /^\/?file\/[^/]+\/([^/]+)\/(.+?)(\?.*)?(#.*)?$/,
   );
   if (storagePath) {
-    return `${getBackendUrl()}/files/${storagePath[1]}/${storagePath[2]}${storagePath[3] || ""}${storagePath[4] || ""}`;
+    return `${getBackendUrl()}/files/${storagePath[1]}/${storagePath[2]}${suffix}`;
   }
 
   // Also accept the same path without the leading slash. This form can be
   // present in exported/imported HTML and otherwise becomes a frontend-local
   // relative URL.
-  const publicPath = src.match(/^\/?files\/([^/]+)\/(.+?)(\?.*)?(#.*)?$/);
+  const publicPath = sourcePath.match(/^\/?files\/([^/]+)\/(.+)$/);
   if (publicPath) {
-    return `${getBackendUrl()}/files/${publicPath[1]}/${publicPath[2]}${publicPath[3] || ""}${publicPath[4] || ""}`;
+    return `${getBackendUrl()}/files/${publicPath[1]}/${publicPath[2]}${suffix}`;
   }
 
-  if (src.startsWith("/api/")) {
+  if (sourcePath.startsWith("/api/files/")) {
     // Remove the '/api' prefix
-    return getBackendUrl() + src.substring(4);
+    return getBackendUrl() + sourcePath.substring(4) + suffix;
   }
-  if (src.startsWith("/files/")) {
-    return getBackendUrl() + src;
+  if (sourcePath.startsWith("/files/")) {
+    return getBackendUrl() + sourcePath + suffix;
   }
-  return sanitizeUrl(src);
+  return sourceIsAbsolute ? sanitizeUrl(src) : sanitizeUrl(rawSrc);
 }
 
 export function getFileUploadSizeLimit() {

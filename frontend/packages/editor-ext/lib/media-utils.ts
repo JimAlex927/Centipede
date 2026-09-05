@@ -25,30 +25,47 @@ function getBackendBaseUrl(): string {
 export function normalizeFileUrl(src: string): string {
   if (!src) return "";
 
-  let normalized = src;
-  const storagePath = src.match(
-    /^\/?file\/[^/]+\/([^/]+)\/(.+?)(\?.*)?(#.*)?$/,
+  const rawSrc = src.trim();
+  let parsed: URL;
+  try {
+    parsed = new URL(
+      rawSrc,
+      typeof window !== "undefined" ? window.location.origin : "http://localhost",
+    );
+  } catch {
+    return src;
+  }
+  const sourceIsAbsolute = /^https?:\/\//i.test(rawSrc);
+  const sourcePath = parsed.pathname;
+  const suffix = `${parsed.search}${parsed.hash}`;
+  if (sourceIsAbsolute && !getBackendBaseUrl()) return src;
+
+  let normalizedPath = sourcePath;
+  const storagePath = sourcePath.match(
+    /^\/?file\/[^/]+\/([^/]+)\/(.+)$/,
   );
   if (storagePath) {
-    normalized = `/api/files/${storagePath[1]}/${storagePath[2]}${storagePath[3] || ""}${storagePath[4] || ""}`;
-  } else if (src.match(/^\/?files\/([^/]+)\/(.+?)(\?.*)?(#.*)?$/)) {
-    normalized = src.startsWith("/") ? "/api" + src : "/api/" + src;
+    normalizedPath = `/api/files/${storagePath[1]}/${storagePath[2]}`;
+  } else if (sourcePath.match(/^\/?files\/([^/]+)\/(.+)$/)) {
+    normalizedPath = sourcePath.startsWith("/")
+      ? "/api" + sourcePath
+      : "/api/" + sourcePath;
   }
-  if (!normalized.startsWith("/api/")) {
-    return normalized;
+  if (!normalizedPath.startsWith("/api/files/")) {
+    return src;
   }
 
   const backendBaseUrl = getBackendBaseUrl();
   if (!backendBaseUrl) {
-    return normalized;
+    return normalizedPath + suffix;
   }
 
   try {
     // An absolute path keeps the API prefix while avoiding the frontend
     // origin when the client is served separately from the Go backend.
-    return new URL(normalized, backendBaseUrl).toString();
+    return new URL(normalizedPath + suffix, backendBaseUrl).toString();
   } catch {
-    return normalized;
+    return normalizedPath + suffix;
   }
 }
 

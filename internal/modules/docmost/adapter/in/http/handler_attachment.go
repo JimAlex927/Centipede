@@ -61,6 +61,13 @@ func (handler *Handler) uploadFile(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, "Failed to inspect uploaded file")
 		return
 	}
+	// Draw.io stores diagrams as SVG files. Content sniffing can classify an
+	// XML-based SVG as text/xml, which prevents browsers from treating it as an
+	// image. Keep the media type stable for both newly uploaded and re-saved
+	// diagrams.
+	if extension == ".svg" {
+		mimeType = "image/svg+xml"
+	}
 
 	attachmentID := strings.TrimSpace(c.PostForm("attachmentId"))
 	var existing *domain.Attachment
@@ -532,7 +539,7 @@ func containsFold(items []string, target string) bool {
 
 func inlineExtension(extension string) bool {
 	switch strings.ToLower(extension) {
-	case ".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".txt", ".mp3", ".mp4", ".webm", ".ogg":
+	case ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".pdf", ".txt", ".mp3", ".mp4", ".webm", ".ogg":
 		return true
 	default:
 		return false

@@ -27,4 +27,14 @@ describe("getFileUrl", () => {
       "http://localhost:7788/api/files/attachment-1/manual.pdf",
     );
   });
+
+  it("rewrites an absolute legacy attachment URL to the configured backend", () => {
+    expect(
+      getFileUrl(
+        "http://old-docmost.example/file/workspace-1/attachment-1/diagram.drawio.svg?t=123",
+      ),
+    ).toBe(
+      "http://localhost:7788/api/files/attachment-1/diagram.drawio.svg?t=123",
+    );
+  });
 });
