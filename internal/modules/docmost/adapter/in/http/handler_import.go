@@ -186,6 +186,9 @@ func extractPDFTextWithOCR(fileName string, ocrConfig config.PDFOCRConfig) (stri
 	if ocrConfig.MaxPages <= 0 {
 		ocrConfig.MaxPages = 32
 	}
+	if strings.TrimSpace(ocrConfig.Language) == "" {
+		ocrConfig.Language = "eng"
+	}
 	workDir, err := os.MkdirTemp("", "docmost-pdf-ocr-")
 	if err != nil {
 		return "", err
