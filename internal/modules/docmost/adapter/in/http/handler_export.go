@@ -3,9 +3,11 @@ package http
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"html"
+	"io"
 	"net/http"
 	"net/url"
 	pathpkg "path"
@@ -34,11 +36,6 @@ func (handler *Handler) exportPage(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, "format must be html or markdown")
 		return
 	}
-	if request.IncludeAttachments {
-		writeError(c, http.StatusNotImplemented, "Attachment export is not implemented in Go yet")
-		return
-	}
-
 	current := currentPrincipal(c)
 	page, err := handler.repository.PageByID(c.Request.Context(), request.PageID, request.PageID, current.Workspace.ID, false)
 	if err != nil {
@@ -53,8 +50,16 @@ func (handler *Handler) exportPage(c *gin.Context) {
 		writeError(c, http.StatusInternalServerError, "Failed to load pages for export")
 		return
 	}
-	if request.IncludeChildren {
-		archive, archiveErr := buildPagesZip(pages, request.Format, page.ID)
+	var attachments []zipExportAttachment
+	if request.IncludeAttachments {
+		attachments, err = handler.loadExportAttachments(c.Request.Context(), pages)
+		if err != nil {
+			writeError(c, http.StatusInternalServerError, "Failed to load attachments for export")
+			return
+		}
+	}
+	if request.IncludeChildren || request.IncludeAttachments {
+		archive, archiveErr := buildPagesZipWithAttachments(pages, request.Format, page.ID, attachments)
 		if archiveErr != nil {
 			writeError(c, http.StatusInternalServerError, "Failed to create export archive")
 			return
@@ -96,10 +101,6 @@ func (handler *Handler) exportSpace(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, "spaceId and a valid format are required")
 		return
 	}
-	if request.IncludeAttachments {
-		writeError(c, http.StatusNotImplemented, "Attachment export is not implemented in Go yet")
-		return
-	}
 	current := currentPrincipal(c)
 	if !handler.requireSpaceRole(c, request.SpaceID, "admin") {
 		return
@@ -114,7 +115,15 @@ func (handler *Handler) exportSpace(c *gin.Context) {
 		writeError(c, http.StatusInternalServerError, "Failed to load space pages for export")
 		return
 	}
-	archive, err := buildPagesZip(pages, request.Format, "")
+	attachments := []zipExportAttachment(nil)
+	if request.IncludeAttachments {
+		attachments, err = handler.loadExportAttachments(c.Request.Context(), pages)
+		if err != nil {
+			writeError(c, http.StatusInternalServerError, "Failed to load attachments for export")
+			return
+		}
+	}
+	archive, err := buildPagesZipWithAttachments(pages, request.Format, "", attachments)
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, "Failed to create export archive")
 		return
@@ -125,7 +134,16 @@ func (handler *Handler) exportSpace(c *gin.Context) {
 	c.Data(http.StatusOK, "application/zip", archive)
 }
 
+type zipExportAttachment struct {
+	Attachment domain.Attachment
+	Data       []byte
+}
+
 func buildPagesZip(pages []domain.Page, format, rootID string) ([]byte, error) {
+	return buildPagesZipWithAttachments(pages, format, rootID, nil)
+}
+
+func buildPagesZipWithAttachments(pages []domain.Page, format, rootID string, attachments []zipExportAttachment) ([]byte, error) {
 	var buffer bytes.Buffer
 	archive := zip.NewWriter(&buffer)
 	paths := make(map[string]string, len(pages))
@@ -158,10 +176,14 @@ func buildPagesZip(pages []domain.Page, format, rootID string) ([]byte, error) {
 		filePath := pathpkg.Join(parentPath, base+extension)
 		paths[page.ID] = strings.TrimSuffix(filePath, extension)
 		content := ""
+		pageContent := page.Content
+		if len(attachments) > 0 {
+			pageContent = rewriteExportAttachmentLinks(page.Content, attachments, pathpkg.Dir(filePath))
+		}
 		if format == "html" {
-			content = pageHTMLDocument(page)
+			content = pageHTMLDocumentWithContent(page, pageContent)
 		} else {
-			content = "# " + markdownText(exportTitle(page.Title)) + "\n\n" + renderDocumentMarkdown(page.Content)
+			content = "# " + markdownText(exportTitle(page.Title)) + "\n\n" + renderDocumentMarkdown(pageContent)
 		}
 		entry, err := archive.Create(filePath)
 		if err != nil {
@@ -169,6 +191,18 @@ func buildPagesZip(pages []domain.Page, format, rootID string) ([]byte, error) {
 			return nil, err
 		}
 		if _, err = entry.Write([]byte(content)); err != nil {
+			_ = archive.Close()
+			return nil, err
+		}
+	}
+	for _, attachment := range attachments {
+		entryPath := pathpkg.Join("files", attachment.Attachment.ID, safeExportFileName(attachment.Attachment.FileName))
+		entry, err := archive.Create(entryPath)
+		if err != nil {
+			_ = archive.Close()
+			return nil, err
+		}
+		if _, err = entry.Write(attachment.Data); err != nil {
 			_ = archive.Close()
 			return nil, err
 		}
@@ -202,8 +236,130 @@ func pageExportDepth(pageID string, pages map[string]domain.Page, rootID string,
 }
 
 func pageHTMLDocument(page domain.Page) string {
+	return pageHTMLDocumentWithContent(page, page.Content)
+}
+
+func pageHTMLDocumentWithContent(page domain.Page, content []byte) string {
 	title := exportTitle(page.Title)
-	return "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>" + html.EscapeString(title) + "</title></head><body><h1>" + html.EscapeString(title) + "</h1>" + renderDocumentHTML(page.Content) + "</body></html>"
+	return "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>" + html.EscapeString(title) + "</title></head><body><h1>" + html.EscapeString(title) + "</h1>" + renderDocumentHTML(content) + "</body></html>"
+}
+
+func (handler *Handler) loadExportAttachments(ctx context.Context, pages []domain.Page) ([]zipExportAttachment, error) {
+	if len(pages) == 0 {
+		return []zipExportAttachment{}, nil
+	}
+	pageIDs := make(map[string]bool, len(pages))
+	attachmentIDs := make(map[string]bool)
+	for _, page := range pages {
+		pageIDs[page.ID] = true
+		for _, attachmentID := range exportAttachmentIDs(page.Content) {
+			attachmentIDs[attachmentID] = true
+		}
+	}
+	ids := make([]string, 0, len(attachmentIDs))
+	for attachmentID := range attachmentIDs {
+		ids = append(ids, attachmentID)
+	}
+	items, err := handler.repository.AttachmentsByIDs(ctx, ids, pages[0].WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]zipExportAttachment, 0, len(items))
+	for _, item := range items {
+		if item.PageID == nil || !pageIDs[*item.PageID] || handler.storage == nil {
+			continue
+		}
+		file, openErr := handler.storage.Open(ctx, item.FilePath)
+		if openErr != nil {
+			continue
+		}
+		data, readErr := io.ReadAll(io.LimitReader(file, 100*1024*1024+1))
+		_ = file.Close()
+		if readErr != nil || len(data) > 100*1024*1024 {
+			continue
+		}
+		result = append(result, zipExportAttachment{Attachment: item, Data: data})
+	}
+	return result, nil
+}
+
+func exportAttachmentIDs(content []byte) []string {
+	var value any
+	if len(content) == 0 || json.Unmarshal(content, &value) != nil {
+		return nil
+	}
+	seen := make(map[string]bool)
+	var result []string
+	var walk func(any)
+	walk = func(current any) {
+		switch node := current.(type) {
+		case []any:
+			for _, child := range node {
+				walk(child)
+			}
+		case map[string]any:
+			if attrs, ok := node["attrs"].(map[string]any); ok {
+				if attachmentID, ok := attrs["attachmentId"].(string); ok && attachmentID != "" && !seen[attachmentID] {
+					seen[attachmentID] = true
+					result = append(result, attachmentID)
+				}
+			}
+			for _, child := range node {
+				walk(child)
+			}
+		}
+	}
+	walk(value)
+	return result
+}
+
+func rewriteExportAttachmentLinks(content []byte, attachments []zipExportAttachment, pageDir string) []byte {
+	var value any
+	if len(content) == 0 || json.Unmarshal(content, &value) != nil {
+		return content
+	}
+	paths := make(map[string]string, len(attachments))
+	for _, attachment := range attachments {
+		entryPath := pathpkg.Join("files", attachment.Attachment.ID, safeExportFileName(attachment.Attachment.FileName))
+		paths[attachment.Attachment.ID] = exportRelativePath(pageDir, entryPath)
+	}
+	var walk func(any)
+	walk = func(current any) {
+		object, ok := current.(map[string]any)
+		if !ok {
+			if list, listOK := current.([]any); listOK {
+				for _, child := range list {
+					walk(child)
+				}
+			}
+			return
+		}
+		if attrs, ok := object["attrs"].(map[string]any); ok {
+			if attachmentID, ok := attrs["attachmentId"].(string); ok {
+				if relative, found := paths[attachmentID]; found {
+					attrs["src"] = relative
+				}
+			}
+		}
+		for _, child := range object {
+			walk(child)
+		}
+	}
+	walk(value)
+	result, err := json.Marshal(value)
+	if err != nil {
+		return content
+	}
+	return result
+}
+
+func exportRelativePath(from, to string) string {
+	from = pathpkg.Clean(from)
+	if from == "." || from == "" {
+		return to
+	}
+	depth := len(strings.Split(strings.Trim(from, "/"), "/"))
+	return pathpkg.Join(strings.Repeat("../", depth), to)
 }
 
 func exportTitle(title *string) string {

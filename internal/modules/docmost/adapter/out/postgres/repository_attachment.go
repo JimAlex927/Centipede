@@ -30,6 +30,29 @@ func (repository *Repository) AttachmentByID(ctx context.Context, attachmentID, 
 	return scanAttachment(repository.db.QueryRow(ctx, `SELECT `+attachmentColumns+` FROM attachments a WHERE a.id = $1 AND a.workspace_id = $2 AND a.deleted_at IS NULL`, attachmentID, workspaceID))
 }
 
+func (repository *Repository) AttachmentsByIDs(ctx context.Context, attachmentIDs []string, workspaceID string) ([]domain.Attachment, error) {
+	if len(attachmentIDs) == 0 {
+		return []domain.Attachment{}, nil
+	}
+	rows, err := repository.db.Query(ctx, `SELECT `+attachmentColumns+`
+FROM attachments a
+WHERE a.workspace_id = $1 AND a.id::text = ANY($2) AND a.type = 'file' AND a.deleted_at IS NULL
+ORDER BY a.id`, workspaceID, attachmentIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]domain.Attachment, 0, len(attachmentIDs))
+	for rows.Next() {
+		item, scanErr := scanAttachment(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 type AttachmentInput struct {
 	ID, FileName, FilePath, FileExt, MimeType, Type string
 	FileSize                                        int64

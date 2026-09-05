@@ -34,4 +34,7 @@ func TestExportQueriesAgainstDatabase(t *testing.T) {
 	if _, err = repository.ExportSpacePages(ctx, zeroID, zeroID, zeroID, false); err != nil {
 		t.Fatalf("space export query failed: %v", err)
 	}
+	if _, err = repository.AttachmentsByIDs(ctx, []string{"00000000-0000-0000-0000-000000000000"}, zeroID); err != nil {
+		t.Fatalf("attachment export query failed: %v", err)
+	}
 }
