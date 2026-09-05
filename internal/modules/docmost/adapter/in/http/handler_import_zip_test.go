@@ -182,6 +182,25 @@ func TestConfluenceDrawioPairDetectsNumericServerFiles(t *testing.T) {
 	}
 }
 
+func TestResolveConfluenceAssetPathSupportsNumericAliases(t *testing.T) {
+	assets := map[string]*zip.File{
+		"attachments/123/45678":      {},
+		"attachments/123/manual.pdf": {},
+	}
+	for input, want := range map[string]string{
+		"attachments/123/45678":             "attachments/123/45678",
+		"attachments/123/45678/diagram.png": "attachments/123/45678",
+		"attachments/123/45678.png":         "attachments/123/45678",
+		"attachments/123/manual.pdf":        "attachments/123/manual.pdf",
+		"attachments/123/MANUAL.pdf":        "attachments/123/manual.pdf",
+		"attachments/123/missing-image.png": "attachments/123/missing-image.png",
+	} {
+		if got := resolveConfluenceAssetPath(input, assets); got != want {
+			t.Fatalf("resolveConfluenceAssetPath(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
 func TestBuildDrawioSVG(t *testing.T) {
 	value := buildDrawioSVG([]byte("<mxfile/>"), []byte("png"))
 	if !bytes.Contains(value, []byte(`content="PG14ZmlsZS8+"`)) || !bytes.Contains(value, []byte(`data:image/png;base64,cG5n`)) {

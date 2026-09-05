@@ -469,6 +469,9 @@ func (handler *Handler) importZipAttachments(ctx context.Context, pageID, spaceI
 					}
 				}
 				resourcePath := zipResourcePathForSource(pagePath, resource, source)
+				if source == "confluence" {
+					resourcePath = resolveConfluenceAssetPath(resourcePath, assets)
+				}
 				if file, ok := assets[resourcePath]; ok {
 					if source == "confluence" {
 						drawioPath, pngPath, isDrawio := confluenceDrawioPair(resourcePath, assets)
@@ -747,6 +750,61 @@ func zipResourcePathForSource(pagePath, resource, source string) string {
 		}
 	}
 	return strings.TrimPrefix(pathpkg.Clean(pathpkg.Join(pathpkg.Dir(pagePath), resourcePath)), "./")
+}
+
+// Confluence Server exports are inconsistent about attachment names. The HTML
+// may contain the original filename while the ZIP stores an attachment ID, or
+// the HTML URL may include the original filename after the numeric ZIP entry:
+//
+//	attachments/123/45678
+//	attachments/123/45678/diagram.png
+//	attachments/123/45678.png
+//
+// Resolve those aliases before the importer decides that a resource is
+// external. The returned path always points at an existing ZIP asset.
+func resolveConfluenceAssetPath(resourcePath string, assets map[string]*zip.File) string {
+	if resourcePath == "" {
+		return ""
+	}
+	clean := strings.Trim(strings.ReplaceAll(resourcePath, "\\", "/"), "/")
+	if _, ok := assets[clean]; ok {
+		return clean
+	}
+
+	// Numeric Confluence entries can be followed by a display filename in the
+	// HTML URL. Walk upward until an existing asset is found, but only accept a
+	// numeric leaf so an unrelated directory cannot swallow the resource.
+	for candidate := clean; candidate != "." && candidate != ""; candidate = pathpkg.Dir(candidate) {
+		if _, ok := assets[candidate]; ok && isConfluenceNumericAsset(candidate) {
+			return candidate
+		}
+	}
+
+	// Some exports append an extension to the numeric ID in the HTML while the
+	// ZIP entry has no extension.
+	base := pathpkg.Base(clean)
+	if extension := filepath.Ext(base); extension != "" {
+		candidate := pathpkg.Join(pathpkg.Dir(clean), strings.TrimSuffix(base, extension))
+		if _, ok := assets[candidate]; ok && isConfluenceNumericAsset(candidate) {
+			return candidate
+		}
+	}
+
+	// Last, resolve an original filename located in the same attachment
+	// directory. This covers exports that keep filenames for some resources and
+	// numeric IDs for others.
+	directory := pathpkg.Dir(clean)
+	for candidate := range assets {
+		if pathpkg.Dir(candidate) == directory && strings.EqualFold(pathpkg.Base(candidate), base) {
+			return candidate
+		}
+	}
+	return clean
+}
+
+func isConfluenceNumericAsset(path string) bool {
+	_, ok := confluenceNumericFileID(pathpkg.Base(path))
+	return ok
 }
 
 var (
