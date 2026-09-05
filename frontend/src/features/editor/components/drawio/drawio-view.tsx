@@ -87,6 +87,13 @@ export default function DrawioView(props: NodeViewProps) {
   };
 
   const handleClose = useCallback(() => {
+    // draw.io emits an exit event immediately after the save event when the
+    // user clicks "Save and Exit". The upload is asynchronous, so do not
+    // open the unsaved-changes dialog during that in-flight save.
+    if (isSavingRef.current) {
+      return;
+    }
+
     if (!isDirtyRef.current) {
       close();
       return;
@@ -165,7 +172,11 @@ export default function DrawioView(props: NodeViewProps) {
                   if (data.parentEvent !== "save") {
                     return;
                   }
-                  saveData(data.xml, true).then(() => close()).catch(() => {});
+                  saveData(data.xml, true)
+                    .then(() => {
+                      close();
+                    })
+                    .catch(() => {});
                 }}
                 onClose={(data: EventExit) => {
                   if (data.parentEvent) {

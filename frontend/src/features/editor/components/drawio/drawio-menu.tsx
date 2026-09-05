@@ -193,6 +193,13 @@ export function DrawioMenu({ editor }: EditorMenuProps) {
   }, [editor, editorState?.attachmentId]);
 
   const handleClose = useCallback(() => {
+    // draw.io emits an exit event immediately after the save event when the
+    // user clicks "Save and Exit". The upload is asynchronous, so do not
+    // open the unsaved-changes dialog during that in-flight save.
+    if (isSavingRef.current) {
+      return;
+    }
+
     if (!isDirtyRef.current) {
       close();
       return;
@@ -408,7 +415,11 @@ export function DrawioMenu({ editor }: EditorMenuProps) {
                   if (data.parentEvent !== "save") {
                     return;
                   }
-                  saveData(data.xml).then(() => close()).catch(() => {});
+                  saveData(data.xml)
+                    .then(() => {
+                      close();
+                    })
+                    .catch(() => {});
                 }}
                 onClose={(data: EventExit) => {
                   if (data.parentEvent) {
