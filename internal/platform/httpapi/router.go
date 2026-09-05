@@ -50,6 +50,8 @@ func NewRouter(cfg config.Config, database *pgxpool.Pool, logger *zap.Logger) ht
 	)
 	collaborationHandler := docmosthttp.NewCollaborationHandler(docmostpostgres.New(database), cfg.Auth.JWTSecret, cfg.Server.CORSOrigins)
 	engine.Any("/collab/:room", gin.WrapH(collaborationHandler))
+	realtimeHandler := docmosthttp.NewRealtimeHandler(docmostpostgres.New(database), cfg.Auth.JWTSecret, cfg.Server.CORSOrigins)
+	engine.GET("/realtime", gin.WrapH(realtimeHandler))
 	docmostHandler.Register(engine)
 	if cfg.Migration.LegacyBaseURL != "" {
 		legacyProxy, err := newLegacyProxy(cfg.Migration.LegacyBaseURL)
