@@ -54,6 +54,12 @@ func NewHandler(repository *postgres.Repository, secret string, cookieTTL time.D
 }
 
 func (handler *Handler) Register(router gin.IRouter) {
+	// Public share pages are rendered by the separately deployed React client.
+	// Keep the upstream share URL shape working without making the Go API serve
+	// a second copy of the frontend bundle.
+	router.GET("/share/p/:pageSlug", handler.sharePageRedirect)
+	router.GET("/share/:shareID/p/:pageSlug", handler.sharePageRedirect)
+
 	api := router.Group("/api")
 
 	api.POST("/workspace/public", handler.publicWorkspace)
@@ -152,6 +158,18 @@ func (handler *Handler) Register(router gin.IRouter) {
 	handler.registerExtraRoutes(protected)
 
 	protected.GET("/migration/status", handler.migrationStatus)
+}
+
+func (handler *Handler) sharePageRedirect(c *gin.Context) {
+	if handler.frontendURL == "" {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	target := strings.TrimRight(handler.frontendURL, "/") + c.Request.URL.EscapedPath()
+	if c.Request.URL.RawQuery != "" {
+		target += "?" + c.Request.URL.RawQuery
+	}
+	c.Redirect(http.StatusTemporaryRedirect, target)
 }
 
 func (handler *Handler) authenticate() gin.HandlerFunc {
