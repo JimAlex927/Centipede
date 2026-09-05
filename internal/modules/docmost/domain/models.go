@@ -103,6 +103,18 @@ type Page struct {
 	Space           *SpaceSummary   `json:"space,omitempty"`
 }
 
+type PagePermissionMember struct {
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Role        string    `json:"role"`
+	CreatedAt   time.Time `json:"createdAt"`
+	Type        string    `json:"type"`
+	Email       string    `json:"email,omitempty"`
+	AvatarURL   *string   `json:"avatarUrl,omitempty"`
+	MemberCount int64     `json:"memberCount,omitempty"`
+	IsDefault   bool      `json:"isDefault,omitempty"`
+}
+
 type UserSummary struct {
 	ID        string  `json:"id"`
 	Name      *string `json:"name"`

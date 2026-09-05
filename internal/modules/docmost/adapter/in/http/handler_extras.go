@@ -12,6 +12,7 @@ import (
 )
 
 func (handler *Handler) registerExtraRoutes(router gin.IRouter) {
+	handler.registerPagePermissionRoutes(router)
 	router.POST("/groups", handler.groups)
 	router.POST("/groups/info", handler.groupInfo)
 	router.POST("/groups/create", handler.createGroup)
