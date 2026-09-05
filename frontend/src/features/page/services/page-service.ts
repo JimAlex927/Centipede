@@ -14,6 +14,7 @@ import { saveAs } from "file-saver";
 import { InfiniteData } from "@tanstack/react-query";
 import { IFileTask } from '@/features/file-task/types/file-task.types.ts';
 import { IAttachment } from '@/features/attachments/types/attachment.types.ts';
+import { getDownloadFileName } from "@/lib/download";
 
 export async function createPage(data: Partial<IPage>): Promise<IPage> {
   const req = await api.post<IPage>("/pages/create", data);
@@ -118,18 +119,8 @@ export async function exportPage(data: IExportPageParams): Promise<void> {
     responseType: "blob",
   });
 
-  const fileName = req?.headers["content-disposition"]
-    .split("filename=")[1]
-    .replace(/"/g, "");
-
-  let decodedFileName = fileName;
-  try {
-    decodedFileName = decodeURIComponent(fileName);
-  } catch (err) {
-    // fallback to raw filename
-  }
-
-  saveAs(req.data, decodedFileName);
+  const fallback = `page-export.${data.includeChildren || data.includeAttachments ? "zip" : data.format}`;
+  saveAs(req.data, getDownloadFileName(req, fallback));
 }
 
 export async function exportPageToDocx(data: { pageId: string }): Promise<void> {
@@ -137,18 +128,7 @@ export async function exportPageToDocx(data: { pageId: string }): Promise<void> 
     responseType: "blob",
   });
 
-  const fileName = req?.headers["content-disposition"]
-    .split("filename=")[1]
-    .replace(/"/g, "");
-
-  let decodedFileName = fileName;
-  try {
-    decodedFileName = decodeURIComponent(fileName);
-  } catch (err) {
-    // fallback to raw filename
-  }
-
-  saveAs(req.data, decodedFileName);
+  saveAs(req.data, getDownloadFileName(req, `page-export-${data.pageId}.docx`));
 }
 
 export async function importPage(file: File, spaceId: string) {

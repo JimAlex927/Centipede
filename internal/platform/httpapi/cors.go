@@ -30,6 +30,10 @@ func cors(allowedOrigins []string) gin.HandlerFunc {
 		c.Header("Access-Control-Allow-Credentials", "true")
 		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, X-Request-ID")
 		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+		// Export endpoints return the download name through this response
+		// header. It must be explicitly exposed for a browser client hosted on
+		// a different origin to read it.
+		c.Header("Access-Control-Expose-Headers", "Content-Disposition, Content-Length")
 		c.Header("Vary", "Origin")
 
 		if c.Request.Method == http.MethodOptions {
