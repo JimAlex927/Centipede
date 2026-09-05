@@ -38,3 +38,14 @@ func TestMarkdownImageImport(t *testing.T) {
 		t.Fatalf("plain text fallback changed unexpectedly: %#v", nodes)
 	}
 }
+
+func TestZipImportSources(t *testing.T) {
+	for _, source := range []string{"generic", "notion", "confluence"} {
+		if !isSupportedZipImportSource(source) {
+			t.Fatalf("source unexpectedly rejected: %q", source)
+		}
+	}
+	if isSupportedZipImportSource("unknown") {
+		t.Fatal("unknown source unexpectedly accepted")
+	}
+}

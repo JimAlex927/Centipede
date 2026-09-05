@@ -39,8 +39,8 @@ func (handler *Handler) importZip(c *gin.Context) {
 		return
 	}
 	source := strings.ToLower(strings.TrimSpace(c.PostForm("source")))
-	if source != "generic" {
-		writeError(c, http.StatusNotImplemented, "Only generic ZIP import is implemented in Go yet")
+	if !isSupportedZipImportSource(source) {
+		writeError(c, http.StatusBadRequest, "Invalid ZIP import source")
 		return
 	}
 	file, err := c.FormFile("file")
@@ -98,6 +98,10 @@ func (handler *Handler) importZip(c *gin.Context) {
 	status := "success"
 	task.Status = &status
 	writeData(c, http.StatusOK, task)
+}
+
+func isSupportedZipImportSource(source string) bool {
+	return source == "generic" || source == "notion" || source == "confluence"
 }
 
 func (handler *Handler) processGenericZip(c *gin.Context, data []byte, spaceID string, current principal) error {
