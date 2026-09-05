@@ -1,10 +1,11 @@
 import { Group, Stack, Text, TextInput } from "@mantine/core";
 import { useTranslation } from "react-i18next";
 import CopyTextButton from "@/components/common/copy.tsx";
+import { getBackendOrigin } from "@/lib/config.ts";
 
 export function ScimUrlPanel() {
   const { t } = useTranslation();
-  const scimUrl = `${window.location.origin}/api/scim/v2`;
+  const scimUrl = `${getBackendOrigin()}/api/scim/v2`;
 
   return (
     <Stack gap="xs">
