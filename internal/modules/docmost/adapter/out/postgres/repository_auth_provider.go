@@ -145,7 +145,19 @@ type AuthProviderUpdate struct {
 }
 
 func (repository *Repository) UpdateAuthProvider(ctx context.Context, id, workspaceID string, input AuthProviderUpdate) (AuthProvider, error) {
-	result, err := repository.db.Exec(ctx, `
+	tx, err := repository.db.Begin(ctx)
+	if err != nil {
+		return AuthProvider{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if input.GroupSync != nil && *input.GroupSync {
+		if _, err = tx.Exec(ctx, `
+UPDATE auth_providers SET group_sync = false, updated_at = now()
+WHERE workspace_id = $1 AND id <> $2 AND deleted_at IS NULL`, workspaceID, id); err != nil {
+			return AuthProvider{}, err
+		}
+	}
+	result, err := tx.Exec(ctx, `
 UPDATE auth_providers SET
   name = COALESCE($3, name), saml_url = COALESCE($4, saml_url),
   saml_certificate = COALESCE($5, saml_certificate), oidc_issuer = COALESCE($6, oidc_issuer),
@@ -164,6 +176,9 @@ WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`, id, workspaceID,
 	}
 	if result.RowsAffected() == 0 {
 		return AuthProvider{}, ErrNotFound
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return AuthProvider{}, err
 	}
 	return repository.AuthProviderByID(ctx, id, workspaceID)
 }

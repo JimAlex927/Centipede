@@ -2,6 +2,8 @@ package http
 
 import (
 	"encoding/base64"
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/crewjam/saml"
@@ -49,5 +51,35 @@ func TestParseSAMLSigningCertificateRejectsInvalidDER(t *testing.T) {
 	_, _, err := parseSAMLSigningCertificate(base64.StdEncoding.EncodeToString(der))
 	if err == nil {
 		t.Fatal("expected invalid certificate error")
+	}
+}
+
+func TestSSOClaimValuesAcceptStringAndArray(t *testing.T) {
+	if got := ssoClaimValues(json.RawMessage(`"engineering"`)); len(got) != 1 || got[0] != "engineering" {
+		t.Fatalf("unexpected single group claim: %#v", got)
+	}
+	if got := ssoClaimValues(json.RawMessage(`["Engineering", "support"]`)); len(got) != 2 || got[1] != "support" {
+		t.Fatalf("unexpected group claim array: %#v", got)
+	}
+}
+
+func TestSAMLIdentityExtractsAllGroupAttributeValues(t *testing.T) {
+	assertion := &saml.Assertion{
+		Subject: &saml.Subject{NameID: &saml.NameID{Value: "idp-user-1"}},
+		AttributeStatements: []saml.AttributeStatement{{Attributes: []saml.Attribute{
+			{Name: "mail", Values: []saml.AttributeValue{{Value: "user@example.com"}}},
+			{Name: "groups", Values: []saml.AttributeValue{{Value: "Engineering"}, {Value: "support"}, {Value: "engineering"}}},
+		}}},
+	}
+	_, _, _, groups := samlIdentityWithGroups(assertion)
+	if len(groups) != 2 || groups[0] != "Engineering" || groups[1] != "support" {
+		t.Fatalf("unexpected SAML groups: %#v", groups)
+	}
+}
+
+func TestUniqueSSOGroupNamesLimitsAndDeduplicates(t *testing.T) {
+	values := normalizeSSOGroupNames([]string{" Admin ", "admin", "", strings.Repeat("x", 256)})
+	if len(values) != 1 || values[0] != "Admin" {
+		t.Fatalf("unexpected normalized groups: %#v", values)
 	}
 }

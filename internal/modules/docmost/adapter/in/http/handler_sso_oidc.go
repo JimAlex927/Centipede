@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
@@ -115,11 +116,13 @@ func (handler *Handler) oidcCallback(c *gin.Context) {
 		return
 	}
 	var claims struct {
-		Subject       string `json:"sub"`
-		Email         string `json:"email"`
-		EmailVerified bool   `json:"email_verified"`
-		Name          string `json:"name"`
-		PreferredName  string `json:"preferred_username"`
+		Subject       string          `json:"sub"`
+		Email         string          `json:"email"`
+		EmailVerified bool            `json:"email_verified"`
+		Name          string          `json:"name"`
+		PreferredName string          `json:"preferred_username"`
+		Groups        json.RawMessage `json:"groups"`
+		Roles         json.RawMessage `json:"roles"`
 	}
 	if err := idToken.Claims(&claims); err != nil || strings.TrimSpace(claims.Subject) == "" || strings.TrimSpace(claims.Email) == "" {
 		writeError(c, http.StatusUnauthorized, "OIDC identity is missing required claims")
@@ -147,6 +150,13 @@ func (handler *Handler) oidcCallback(c *gin.Context) {
 			writeError(c, http.StatusInternalServerError, "Failed to create SSO account")
 		}
 		return
+	}
+	if provider.GroupSync {
+		groups := append(ssoClaimValues(claims.Groups), ssoClaimValues(claims.Roles)...)
+		if err := handler.repository.SyncSSOGroups(c.Request.Context(), user.ID, workspace.ID, groups); err != nil {
+			writeError(c, http.StatusInternalServerError, "Failed to synchronize SSO groups")
+			return
+		}
 	}
 	if err := handler.finishSSOLogin(c, user, workspace, state.Redirect); err != nil {
 		writeError(c, http.StatusInternalServerError, "Failed to create login session")

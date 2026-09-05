@@ -83,7 +83,7 @@ migration:
 
 迁移期间，Docmost 前端将 `API_BASE_URL` 指向 Centipede 的 `/api` 地址即可。每迁移一个领域，再把对应路由注册到 Centipede，旧服务会自动退居为该路由的 fallback；不需要一次性切换全部接口。
 
-当前 Go 服务直接访问 Docmost PostgreSQL 数据库，已覆盖认证、空间、页面、评论、搜索、附件、导入导出、协同编辑、实时通知和公开分享等主要链路。`legacy_base_url` 可以留空，只有尚未迁移的企业版能力、PDF OCR、完整 Confluence 导入等功能仍需要旧 Node 服务。
+当前 Go 服务直接访问 Docmost PostgreSQL 数据库，已覆盖认证、空间、页面、评论、搜索、附件、导入导出、协同编辑、实时通知、公开分享、MCP 和 SSO 群组同步等主要链路。`legacy_base_url` 可以留空，只有尚未迁移的企业版能力、完整 Confluence 导入等功能仍需要旧 Node 服务。
 
 ### 启动 Docmost 前端
 
@@ -100,7 +100,7 @@ pnpm install
 pnpm dev
 ```
 
-如需使用 pending 功能，再启动 Node 服务，并在 Go 配置中设置 `migration.legacy_base_url`。
+如需使用迁移状态接口中仍标记为 pending 的功能，再启动 Node 服务，并在 Go 配置中设置 `migration.legacy_base_url`。
 
 扫描版 PDF 的 OCR 是可选外部能力，不依赖 Node。配置 `pdf_ocr.tesseract_path` 和
 `pdf_ocr.pdftoppm_path` 后，Go 后端会在文本提取为空时调用这两个程序；不配置时仍支持普通文本 PDF 导入，并会明确提示需要 OCR 配置。

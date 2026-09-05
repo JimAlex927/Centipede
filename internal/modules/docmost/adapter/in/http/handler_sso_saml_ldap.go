@@ -127,7 +127,7 @@ func (handler *Handler) samlCallback(c *gin.Context) {
 		writeError(c, http.StatusUnauthorized, "SAML response could not be verified")
 		return
 	}
-	providerUserID, email, name := samlIdentity(assertion)
+	providerUserID, email, name, groups := samlIdentityWithGroups(assertion)
 	if providerUserID == "" || email == "" {
 		writeError(c, http.StatusUnauthorized, "SAML identity is missing required attributes")
 		return
@@ -146,6 +146,12 @@ func (handler *Handler) samlCallback(c *gin.Context) {
 			writeError(c, http.StatusInternalServerError, "Failed to create SSO account")
 		}
 		return
+	}
+	if provider.GroupSync {
+		if err := handler.repository.SyncSSOGroups(c.Request.Context(), user.ID, workspace.ID, groups); err != nil {
+			writeError(c, http.StatusInternalServerError, "Failed to synchronize SSO groups")
+			return
+		}
 	}
 	if err := handler.finishSSOLogin(c, user, workspace, state.Redirect); err != nil {
 		writeError(c, http.StatusInternalServerError, "Failed to create login session")
@@ -188,6 +194,12 @@ func (handler *Handler) ldapLogin(c *gin.Context) {
 			writeError(c, http.StatusInternalServerError, "Failed to create SSO account")
 		}
 		return
+	}
+	if provider.GroupSync {
+		if err := handler.repository.SyncSSOGroups(c.Request.Context(), user.ID, workspace.ID, identity.Groups); err != nil {
+			writeError(c, http.StatusInternalServerError, "Failed to synchronize SSO groups")
+			return
+		}
 	}
 	if err := handler.finishSSOAPILogin(c, user, workspace); err != nil {
 		writeError(c, http.StatusInternalServerError, "Failed to create login session")
@@ -298,33 +310,7 @@ func samlResponseIssuer(data []byte) (string, error) {
 }
 
 func samlIdentity(assertion *saml.Assertion) (providerUserID, email, name string) {
-	if assertion == nil {
-		return "", "", ""
-	}
-	if assertion.Subject != nil && assertion.Subject.NameID != nil {
-		providerUserID = strings.TrimSpace(assertion.Subject.NameID.Value)
-	}
-	attributes := make(map[string]string)
-	for _, statement := range assertion.AttributeStatements {
-		for _, attribute := range statement.Attributes {
-			if len(attribute.Values) == 0 {
-				continue
-			}
-			value := strings.TrimSpace(attribute.Values[0].Value)
-			if value == "" {
-				continue
-			}
-			attributes[strings.ToLower(strings.TrimSpace(attribute.Name))] = value
-			if attribute.FriendlyName != "" {
-				attributes[strings.ToLower(strings.TrimSpace(attribute.FriendlyName))] = value
-			}
-		}
-	}
-	email = firstIdentityValue(attributes, "email", "mail", "emailaddress", "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress", "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/upn")
-	name = firstIdentityValue(attributes, "name", "displayname", "cn", "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name")
-	if providerUserID == "" {
-		providerUserID = email
-	}
+	providerUserID, email, name, _ = samlIdentityWithGroups(assertion)
 	return providerUserID, email, name
 }
 
@@ -341,6 +327,7 @@ type ldapIdentity struct {
 	ProviderUserID string
 	Email          string
 	Name           string
+	Groups         []string
 }
 
 func authenticateLDAP(c *gin.Context, provider postgres.AuthProvider, username, password string) (ldapIdentity, error) {
@@ -402,7 +389,8 @@ func authenticateLDAP(c *gin.Context, provider postgres.AuthProvider, username, 
 	if providerUserID == "" {
 		providerUserID = entry.DN
 	}
-	return ldapIdentity{ProviderUserID: providerUserID, Email: email, Name: name}, nil
+	groups := append(entry.GetAttributeValues("memberOf"), entry.GetAttributeValues("groups")...)
+	return ldapIdentity{ProviderUserID: providerUserID, Email: email, Name: name, Groups: normalizeSSOGroupNames(groups)}, nil
 }
 
 func ldapSearchFilter(configured *string, username string) string {
@@ -427,7 +415,7 @@ func ldapTLSConfig(parsed *url.URL, provider postgres.AuthProvider) (*tls.Config
 }
 
 func ldapSearchAttributes(raw json.RawMessage) []string {
-	attributes := []string{"mail", "email", "emailAddress", "userPrincipalName", "uid", "sAMAccountName", "displayName", "cn", "givenName", "sn"}
+	attributes := []string{"mail", "email", "emailAddress", "userPrincipalName", "uid", "sAMAccountName", "displayName", "cn", "givenName", "sn", "memberOf", "groups"}
 	var mapping map[string]any
 	if json.Unmarshal(raw, &mapping) == nil {
 		for _, value := range mapping {

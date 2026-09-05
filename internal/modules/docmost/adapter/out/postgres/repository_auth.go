@@ -269,6 +269,91 @@ SELECT $1, $2, id FROM groups WHERE workspace_id = $3 AND is_default = true AND 
 	return repository.UserByID(ctx, userID, workspaceID)
 }
 
+// SyncSSOGroups makes the non-SCIM external group memberships for a user
+// reflect the groups supplied by the identity provider. Group names are the
+// stable identifier exposed by the current Docmost SSO contract; matching is
+// case-insensitive and missing groups are created as external groups.
+func (repository *Repository) SyncSSOGroups(ctx context.Context, userID, workspaceID string, groupNames []string) error {
+	names := uniqueSSOGroupNames(groupNames)
+	tx, err := repository.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// SCIM owns groups with a SCIM external id. They must not be changed by
+	// interactive SSO login, even when both features are configured.
+	if _, err = tx.Exec(ctx, `
+DELETE FROM group_users gu
+USING groups g
+WHERE gu.group_id = g.id
+  AND gu.user_id = $1
+  AND g.workspace_id = $2
+  AND g.is_default = false
+  AND COALESCE(g.is_external, false) = true
+  AND g.scim_external_id IS NULL`, userID, workspaceID); err != nil {
+		return err
+	}
+
+	for _, name := range names {
+		var groupID string
+		err = tx.QueryRow(ctx, `
+SELECT id::text
+FROM groups
+WHERE workspace_id = $1 AND lower(name) = lower($2)
+  AND deleted_at IS NULL AND is_default = false
+ORDER BY id
+LIMIT 1`, workspaceID, name).Scan(&groupID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			groupID, err = newUUID()
+			if err != nil {
+				return err
+			}
+			if _, err = tx.Exec(ctx, `
+INSERT INTO groups (id, name, is_default, is_external, workspace_id)
+VALUES ($1, $2, false, true, $3)`, groupID, name, workspaceID); err != nil {
+				return err
+			}
+		} else if err != nil {
+			return err
+		}
+
+		membershipID, idErr := newUUID()
+		if idErr != nil {
+			return idErr
+		}
+		if _, err = tx.Exec(ctx, `
+INSERT INTO group_users (id, group_id, user_id)
+VALUES ($1, $2, $3)
+ON CONFLICT (group_id, user_id) DO NOTHING`, membershipID, groupID, userID); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit(ctx)
+}
+
+func uniqueSSOGroupNames(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || len(value) > 255 {
+			continue
+		}
+		key := strings.ToLower(value)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, value)
+		if len(result) == 100 {
+			break
+		}
+	}
+	return result
+}
+
 func (repository *Repository) ChangePassword(ctx context.Context, userID, workspaceID, passwordHash, currentSessionID string) error {
 	tx, err := repository.db.Begin(ctx)
 	if err != nil {
