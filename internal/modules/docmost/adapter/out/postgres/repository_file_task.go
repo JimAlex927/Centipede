@@ -19,6 +19,13 @@ COALESCE(f.file_size, 0), f.file_ext, f.error_message, f.creator_id::text,
 f.page_id::text, f.space_id::text, f.workspace_id::text,
 COALESCE(f.metadata, '{}'::jsonb), f.created_at, f.updated_at, f.deleted_at`
 
+type FileTaskInput struct {
+	ID, Type, Source, FileName, FilePath, FileExt string
+	FileSize                                      int64
+	CreatorID, SpaceID, WorkspaceID               string
+	Status                                        string
+}
+
 func scanFileTask(row rowScanner) (domain.FileTask, error) {
 	var task domain.FileTask
 	err := row.Scan(
@@ -37,6 +44,25 @@ func (repository *Repository) FileTaskByID(ctx context.Context, taskID, workspac
 	return scanFileTask(repository.db.QueryRow(ctx, `SELECT `+fileTaskColumns+`
 FROM file_tasks f
 WHERE f.id = $1 AND f.workspace_id = $2`, taskID, workspaceID))
+}
+
+func (repository *Repository) CreateFileTask(ctx context.Context, input FileTaskInput) (domain.FileTask, error) {
+	_, err := repository.db.Exec(ctx, `INSERT INTO file_tasks
+(id, type, source, status, file_name, file_path, file_size, file_ext, creator_id, space_id, workspace_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+		input.ID, input.Type, input.Source, input.Status, input.FileName, input.FilePath,
+		input.FileSize, input.FileExt, input.CreatorID, input.SpaceID, input.WorkspaceID)
+	if err != nil {
+		return domain.FileTask{}, err
+	}
+	return repository.FileTaskByID(ctx, input.ID, input.WorkspaceID)
+}
+
+func (repository *Repository) UpdateFileTaskStatus(ctx context.Context, taskID, workspaceID, status, errorMessage string) error {
+	_, err := repository.db.Exec(ctx, `UPDATE file_tasks
+SET status = $3, error_message = NULLIF($4, ''), updated_at = now()
+WHERE id = $1 AND workspace_id = $2`, taskID, workspaceID, status, errorMessage)
+	return err
 }
 
 func (repository *Repository) FileTasks(ctx context.Context, workspaceID, userID, cursor, beforeCursor string, limit int) (domain.Pagination[domain.FileTask], error) {
