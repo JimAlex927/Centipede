@@ -138,8 +138,13 @@ func children(f *crdt.YXmlFragment, depth int, count *int, text *strings.Builder
 					if delta.Attributes[k] == nil {
 						continue
 					}
-					attrs, _ := delta.Attributes[k].(map[string]any)
-					node.Marks = append(node.Marks, Mark{Type: strings.Split(k, "--")[0], Attrs: attrs})
+					attrs, ok := delta.Attributes[k].(crdt.Attributes)
+					if !ok {
+						attrsMap, _ := delta.Attributes[k].(map[string]any)
+						node.Marks = append(node.Marks, Mark{Type: strings.Split(k, "--")[0], Attrs: attrsMap})
+						continue
+					}
+					node.Marks = append(node.Marks, Mark{Type: strings.Split(k, "--")[0], Attrs: map[string]any(attrs)})
 				}
 				result = append(result, node)
 				text.WriteString(value)
