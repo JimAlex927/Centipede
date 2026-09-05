@@ -8,34 +8,84 @@ import (
 	"strings"
 	"time"
 
+	"centipede/internal/modules/docmost/adapter/out/postgres"
 	"centipede/internal/modules/docmost/domain"
 )
 
 const maxAttachmentIndexBytes int64 = 30 * 1024 * 1024
 
 // scheduleAttachmentIndex mirrors the upstream attachment queue at the
-// service boundary. Indexing is best effort and never delays an upload.
+// service boundary. The queue record is persisted before the worker starts,
+// so a process restart cannot lose an indexing job. Enqueuing remains
+// asynchronous and never delays an upload response.
 func (handler *Handler) scheduleAttachmentIndex(attachment domain.Attachment) {
-	if handler.storage == nil || attachment.Type == nil || *attachment.Type != "file" {
+	if handler.storage == nil || attachment.Type == nil || *attachment.Type != "file" || attachment.SpaceID == nil || !isIndexableAttachmentExtension(attachment.FileExt) {
 		return
 	}
 	go func() {
 		if !handler.workspaceHasFeature(context.Background(), attachment.WorkspaceID, "attachment:indexing") {
 			return
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
-		file, err := handler.storage.Open(ctx, attachment.FilePath)
+		taskID, err := importTaskUUID()
 		if err != nil {
 			return
 		}
-		defer file.Close()
-		textContent, err := extractAttachmentText(file, attachment.FileExt)
-		if err != nil || strings.TrimSpace(textContent) == "" {
+		task, err := handler.repository.CreateFileTask(context.Background(), postgres.FileTaskInput{
+			ID: taskID, Type: "attachment-index", Source: attachment.ID,
+			FileName: attachment.FileName, FilePath: attachment.FilePath, FileSize: attachment.FileSize,
+			FileExt: attachment.FileExt, CreatorID: attachment.CreatorID, SpaceID: *attachment.SpaceID,
+			WorkspaceID: attachment.WorkspaceID, Status: "processing",
+		})
+		if err != nil {
 			return
 		}
-		_ = handler.repository.UpdateAttachmentTextContent(ctx, attachment.ID, attachment.WorkspaceID, textContent)
+		handler.runAttachmentIndex(task)
 	}()
+}
+
+// ResumePendingAttachmentIndexes is called during handler initialization and
+// picks up jobs that were persisted before an earlier process stopped.
+func (handler *Handler) ResumePendingAttachmentIndexes(ctx context.Context) {
+	if handler.storage == nil || handler.repository == nil {
+		return
+	}
+	tasks, err := handler.repository.ProcessingAttachmentIndexTasks(ctx, 100)
+	if err != nil {
+		return
+	}
+	for _, task := range tasks {
+		go handler.runAttachmentIndex(task)
+	}
+}
+
+func (handler *Handler) runAttachmentIndex(task domain.FileTask) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	attachmentID := ""
+	if task.Source != nil {
+		attachmentID = strings.TrimSpace(*task.Source)
+	}
+	attachment, err := handler.repository.AttachmentByID(ctx, attachmentID, task.WorkspaceID)
+	if err != nil {
+		_ = handler.repository.UpdateFileTaskStatus(context.Background(), task.ID, task.WorkspaceID, "failed", "Attachment is no longer available")
+		return
+	}
+	file, err := handler.storage.Open(ctx, attachment.FilePath)
+	if err != nil {
+		_ = handler.repository.UpdateFileTaskStatus(context.Background(), task.ID, task.WorkspaceID, "failed", "Attachment file is no longer available")
+		return
+	}
+	textContent, extractErr := extractAttachmentText(file, attachment.FileExt)
+	_ = file.Close()
+	if extractErr != nil {
+		_ = handler.repository.UpdateFileTaskStatus(context.Background(), task.ID, task.WorkspaceID, "failed", extractErr.Error())
+		return
+	}
+	if err := handler.repository.UpdateAttachmentTextContent(ctx, attachment.ID, attachment.WorkspaceID, textContent); err != nil {
+		_ = handler.repository.UpdateFileTaskStatus(context.Background(), task.ID, task.WorkspaceID, "failed", "Failed to save attachment index")
+		return
+	}
+	_ = handler.repository.UpdateFileTaskStatus(context.Background(), task.ID, task.WorkspaceID, "success", "")
 }
 
 func extractAttachmentText(reader io.Reader, extension string) (string, error) {
@@ -94,6 +144,11 @@ func isTextAttachmentExtension(extension string) bool {
 	default:
 		return false
 	}
+}
+
+func isIndexableAttachmentExtension(extension string) bool {
+	extension = strings.ToLower(strings.TrimSpace(extension))
+	return extension == ".pdf" || extension == ".docx" || isTextAttachmentExtension(extension)
 }
 
 func importNodesText(nodes []importNode) string {

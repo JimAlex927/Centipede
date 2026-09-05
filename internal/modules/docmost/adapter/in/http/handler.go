@@ -50,7 +50,7 @@ type principal struct {
 }
 
 func NewHandler(repository *postgres.Repository, secret string, cookieTTL time.Duration, cookieSecure bool, frontendURL, publicURL, legacyURL string, mailer application.Mailer, storage application.Storage, maxUpload int64, aiConfig config.AIConfig, pdfOCR config.PDFOCRConfig) *Handler {
-	return &Handler{
+	handler := &Handler{
 		repository: repository, tokens: newTokenService(secret),
 		licenseService: enterprise.NewLicenseService(secret),
 		aiProvider:     application.NewAIProvider(aiConfig.BaseURL, aiConfig.APIKey, aiConfig.ChatModel, aiConfig.RequestTimeout),
@@ -58,6 +58,15 @@ func NewHandler(repository *postgres.Repository, secret string, cookieTTL time.D
 		frontendURL: strings.TrimRight(frontendURL, "/"), publicURL: strings.TrimRight(publicURL, "/"), legacyURL: strings.TrimRight(legacyURL, "/"),
 		mailer: mailer, storage: storage, maxUpload: maxUpload, pdfOCR: pdfOCR,
 	}
+	go func() {
+		if handler.repository == nil {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		handler.ResumePendingAttachmentIndexes(ctx)
+	}()
+	return handler
 }
 
 func (handler *Handler) Register(router gin.IRouter) {
