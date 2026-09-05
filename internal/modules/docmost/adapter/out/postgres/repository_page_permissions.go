@@ -2,6 +2,8 @@ package postgres
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -213,43 +215,101 @@ func (repository *Repository) UpdatePagePermissionRole(ctx context.Context, page
 	return nil
 }
 
-func (repository *Repository) PagePermissionMembers(ctx context.Context, pageID, workspaceID string, limit int) (domain.Pagination[domain.PagePermissionMember], error) {
+func (repository *Repository) PagePermissionMembers(ctx context.Context, pageID, workspaceID, cursor string, limit int) (domain.Pagination[domain.PagePermissionMember], error) {
 	accessID, err := repository.pageAccessID(ctx, pageID, workspaceID)
 	if err != nil {
 		return domain.Pagination[domain.PagePermissionMember]{}, err
 	}
+	pageSize := normalizeLimit(limit)
+	position, err := decodePagePermissionCursor(cursor)
+	if err != nil {
+		return domain.Pagination[domain.PagePermissionMember]{}, err
+	}
 	rows, err := repository.db.Query(ctx, `
-SELECT pp.role, pp.created_at, u.id::text, COALESCE(u.name, ''), u.email, u.avatar_url,
-       NULL::text, NULL::bigint, false
-FROM page_permissions pp JOIN users u ON u.id = pp.user_id
-WHERE pp.page_access_id = $1 AND u.deleted_at IS NULL
-UNION ALL
-SELECT pp.role, pp.created_at, g.id::text, g.name, NULL::text, NULL::text,
-       'group', (SELECT count(*) FROM group_users gu WHERE gu.group_id = g.id), g.is_default
-FROM page_permissions pp JOIN groups g ON g.id = pp.group_id
-WHERE pp.page_access_id = $1 AND g.deleted_at IS NULL
-ORDER BY 7 DESC NULLS LAST, 4, 3
-LIMIT $2`, accessID, normalizeLimit(limit))
+SELECT members.role, members.created_at, members.id, members.name, members.email,
+       members.avatar_url, members.is_group, members.member_count, members.is_default
+FROM (
+  SELECT pp.role, pp.created_at, u.id::text, COALESCE(u.name, '') AS name, u.email, u.avatar_url,
+         false AS is_group, 0::bigint AS member_count, false AS is_default
+  FROM page_permissions pp JOIN users u ON u.id = pp.user_id
+  WHERE pp.page_access_id = $1 AND u.deleted_at IS NULL
+  UNION ALL
+  SELECT pp.role, pp.created_at, g.id::text, g.name, NULL::varchar, NULL::varchar,
+         true AS is_group, (SELECT count(*) FROM group_users gu WHERE gu.group_id = g.id), g.is_default
+  FROM page_permissions pp JOIN groups g ON g.id = pp.group_id
+  WHERE pp.page_access_id = $1 AND g.deleted_at IS NULL
+) members
+WHERE ($2::boolean IS NULL OR members.is_group < $2 OR (members.is_group = $2 AND members.id > $3))
+ORDER BY members.is_group DESC, members.id ASC
+LIMIT $4`, accessID, position.IsGroup, position.ID, pageSize+1)
 	if err != nil {
 		return domain.Pagination[domain.PagePermissionMember]{}, err
 	}
 	defer rows.Close()
-	items := make([]domain.PagePermissionMember, 0)
+	items := make([]domain.PagePermissionMember, 0, pageSize)
+	lastCursor := pagePermissionCursor{}
+	hasMore := false
 	for rows.Next() {
 		var item domain.PagePermissionMember
-		var email, kind *string
-		if err := rows.Scan(&item.Role, &item.CreatedAt, &item.ID, &item.Name, &email, &item.AvatarURL, &kind, &item.MemberCount, &item.IsDefault); err != nil {
+		var email *string
+		var isGroup bool
+		if err := rows.Scan(&item.Role, &item.CreatedAt, &item.ID, &item.Name, &email, &item.AvatarURL, &isGroup, &item.MemberCount, &item.IsDefault); err != nil {
 			return domain.Pagination[domain.PagePermissionMember]{}, err
 		}
-		if kind == nil {
+		if !isGroup {
 			item.Type = "user"
 			item.Email = derefString(email)
 		} else {
 			item.Type = "group"
 		}
-		items = append(items, item)
+		if len(items) < pageSize {
+			items = append(items, item)
+			lastCursor = pagePermissionCursor{IsGroup: &isGroup, ID: item.ID}
+		} else {
+			hasMore = true
+		}
 	}
-	return page(items, limit), rows.Err()
+	if err := rows.Err(); err != nil {
+		return domain.Pagination[domain.PagePermissionMember]{}, err
+	}
+	result := domain.Pagination[domain.PagePermissionMember]{Items: items, Meta: domain.PaginationMeta{Limit: pageSize, HasPrevPage: cursor != ""}}
+	if hasMore && lastCursor.ID != "" {
+		encoded, encodeErr := encodePagePermissionCursor(lastCursor)
+		if encodeErr != nil {
+			return domain.Pagination[domain.PagePermissionMember]{}, encodeErr
+		}
+		result.Meta.HasNextPage = true
+		result.Meta.NextCursor = &encoded
+	}
+	return result, nil
+}
+
+type pagePermissionCursor struct {
+	IsGroup *bool  `json:"isGroup"`
+	ID      string `json:"id"`
+}
+
+func decodePagePermissionCursor(value string) (pagePermissionCursor, error) {
+	if strings.TrimSpace(value) == "" {
+		return pagePermissionCursor{}, nil
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil {
+		return pagePermissionCursor{}, ErrInvalidInput
+	}
+	var cursor pagePermissionCursor
+	if err := json.Unmarshal(decoded, &cursor); err != nil || cursor.ID == "" {
+		return pagePermissionCursor{}, ErrInvalidInput
+	}
+	return cursor, nil
+}
+
+func encodePagePermissionCursor(cursor pagePermissionCursor) (string, error) {
+	value, err := json.Marshal(cursor)
+	if err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(value), nil
 }
 
 func uniqueIDs(values []string) []string {
