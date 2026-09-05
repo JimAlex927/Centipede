@@ -70,6 +70,12 @@ func (handler *Handler) importPage(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, "Invalid import file type.")
 		return
 	}
+	if extension == ".docx" && !handler.requireFeature(c, "import:docx") {
+		return
+	}
+	if extension == ".pdf" && !handler.requireFeature(c, "import:pdf") {
+		return
+	}
 	opened, err := file.Open()
 	if err != nil {
 		writeError(c, http.StatusBadRequest, "Failed to read uploaded file")

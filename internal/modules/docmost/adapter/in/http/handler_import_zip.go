@@ -60,6 +60,9 @@ func (handler *Handler) importZip(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, "Invalid ZIP import source")
 		return
 	}
+	if source == "confluence" && !handler.requireFeature(c, "import:confluence") {
+		return
+	}
 	file, err := c.FormFile("file")
 	if err != nil || file == nil {
 		writeError(c, http.StatusBadRequest, "Failed to upload file")
@@ -93,12 +96,23 @@ func (handler *Handler) importZip(c *gin.Context) {
 		writeError(c, http.StatusInternalServerError, "Failed to create import task")
 		return
 	}
+	fileName := safeExportFileName(filepath.Base(file.Filename))
+	filePath := pathpkg.Join("import", current.Workspace.ID, taskID, fileName)
+	if handler.storage == nil {
+		writeError(c, http.StatusInternalServerError, "Import storage is not configured")
+		return
+	}
+	if _, err := handler.storage.Save(c.Request.Context(), filePath, bytes.NewReader(data), maxSize); err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to store import file")
+		return
+	}
 	task, err := handler.repository.CreateFileTask(c.Request.Context(), postgres.FileTaskInput{
 		ID: taskID, Type: "import", Source: source, Status: "processing", FileName: filepath.Base(file.Filename),
-		FilePath: "", FileSize: int64(len(data)), FileExt: "zip", CreatorID: current.User.ID,
+		FilePath: filePath, FileSize: int64(len(data)), FileExt: "zip", CreatorID: current.User.ID,
 		SpaceID: spaceID, WorkspaceID: current.Workspace.ID,
 	})
 	if err != nil {
+		_ = handler.storage.Delete(c.Request.Context(), filePath)
 		writeError(c, http.StatusInternalServerError, "Failed to create import task")
 		return
 	}
@@ -106,13 +120,13 @@ func (handler *Handler) importZip(c *gin.Context) {
 	// implementation puts this work on BullMQ and returns the processing task
 	// immediately; keep the same contract so the browser can poll file-tasks
 	// without holding the upload request open.
-	go handler.runZipImport(data, task.ID, spaceID, source, current)
+	go handler.runZipImport(data, task.ID, filePath, spaceID, source, current)
 	writeData(c, http.StatusOK, task)
 }
 
 const zipImportTimeout = 30 * time.Minute
 
-func (handler *Handler) runZipImport(data []byte, taskID, spaceID, source string, current principal) {
+func (handler *Handler) runZipImport(data []byte, taskID, filePath, spaceID, source string, current principal) {
 	ctx, cancel := context.WithTimeout(context.Background(), zipImportTimeout)
 	defer cancel()
 
@@ -124,11 +138,55 @@ func (handler *Handler) runZipImport(data []byte, taskID, spaceID, source string
 			errorMessage = "ZIP import failed unexpectedly"
 		}
 		_ = handler.repository.UpdateFileTaskStatus(context.Background(), taskID, current.Workspace.ID, status, errorMessage)
+		if status == "success" && handler.storage != nil && filePath != "" {
+			_ = handler.storage.Delete(context.Background(), filePath)
+		}
 	}()
 
 	if err := handler.processGenericZip(ctx, data, spaceID, source, current); err != nil {
 		status = "failed"
 		errorMessage = err.Error()
+	}
+}
+
+// ResumePendingZipImports lets the Go process recover durable imports that
+// were interrupted by a restart. The task file is kept in storage until the
+// import succeeds, so this does not depend on an in-memory goroutine or a
+// Node/BullMQ worker being available.
+func (handler *Handler) ResumePendingZipImports(ctx context.Context) {
+	if handler.storage == nil {
+		return
+	}
+	tasks, err := handler.repository.ProcessingImportFileTasks(ctx, 100)
+	if err != nil {
+		return
+	}
+	for _, task := range tasks {
+		if task.CreatorID == nil || task.SpaceID == nil || task.Source == nil || task.FilePath == "" {
+			continue
+		}
+		reader, openErr := handler.storage.Open(ctx, task.FilePath)
+		if openErr != nil {
+			_ = handler.repository.UpdateFileTaskStatus(context.Background(), task.ID, task.WorkspaceID, "failed", "Import file is no longer available")
+			continue
+		}
+		maxSize := handler.maxUpload
+		if maxSize <= 0 {
+			maxSize = 100 * 1024 * 1024
+		}
+		data, readErr := io.ReadAll(io.LimitReader(reader, maxSize+1))
+		_ = reader.Close()
+		if readErr != nil || int64(len(data)) > maxSize {
+			_ = handler.repository.UpdateFileTaskStatus(context.Background(), task.ID, task.WorkspaceID, "failed", "Failed to read import file")
+			continue
+		}
+		user, userErr := handler.repository.UserByID(ctx, *task.CreatorID, task.WorkspaceID)
+		workspace, workspaceErr := handler.repository.WorkspaceByID(ctx, task.WorkspaceID)
+		if userErr != nil || workspaceErr != nil {
+			continue
+		}
+		current := principal{User: user, Workspace: workspace}
+		go handler.runZipImport(data, task.ID, task.FilePath, *task.SpaceID, *task.Source, current)
 	}
 }
 

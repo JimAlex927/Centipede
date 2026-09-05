@@ -15,6 +15,9 @@ import (
 )
 
 func (handler *Handler) exportDocx(c *gin.Context) {
+	if !handler.requireFeature(c, "export:docx") {
+		return
+	}
 	var request struct {
 		PageID string `json:"pageId"`
 	}

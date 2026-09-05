@@ -33,6 +33,9 @@ func (handler *Handler) registerPagePermissionRoutes(router gin.IRouter) {
 
 func (handler *Handler) pageForPermission(c *gin.Context, pageID string) (domain.Page, principal, bool) {
 	current := currentPrincipal(c)
+	if !handler.requireFeature(c, "page:permissions") {
+		return domain.Page{}, current, false
+	}
 	if pageID == "" {
 		writeError(c, http.StatusBadRequest, "pageId is required")
 		return domain.Page{}, current, false
