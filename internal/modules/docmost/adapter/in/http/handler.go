@@ -11,6 +11,7 @@ import (
 	"centipede/internal/modules/docmost/adapter/out/postgres"
 	"centipede/internal/modules/docmost/application"
 	"centipede/internal/modules/docmost/domain"
+	"centipede/internal/modules/docmost/enterprise"
 	"centipede/internal/platform/config"
 
 	"github.com/gin-gonic/gin"
@@ -20,18 +21,19 @@ import (
 const principalKey = "docmost_principal"
 
 type Handler struct {
-	repository   *postgres.Repository
-	tokens       *tokenService
-	cookieTTL    time.Duration
-	cookieSecure bool
-	frontendURL  string
-	publicURL    string
-	legacyURL    string
-	mailer       application.Mailer
-	storage      application.Storage
-	maxUpload    int64
-	pdfOCR       config.PDFOCRConfig
-	realtime     *RealtimeHandler
+	repository     *postgres.Repository
+	tokens         *tokenService
+	cookieTTL      time.Duration
+	cookieSecure   bool
+	frontendURL    string
+	publicURL      string
+	legacyURL      string
+	mailer         application.Mailer
+	storage        application.Storage
+	maxUpload      int64
+	pdfOCR         config.PDFOCRConfig
+	realtime       *RealtimeHandler
+	licenseService *enterprise.Service
 }
 
 func (handler *Handler) SetRealtimeHandler(realtime *RealtimeHandler) {
@@ -47,7 +49,8 @@ type principal struct {
 func NewHandler(repository *postgres.Repository, secret string, cookieTTL time.Duration, cookieSecure bool, frontendURL, publicURL, legacyURL string, mailer application.Mailer, storage application.Storage, maxUpload int64, pdfOCR config.PDFOCRConfig) *Handler {
 	return &Handler{
 		repository: repository, tokens: newTokenService(secret),
-		cookieTTL: cookieTTL, cookieSecure: cookieSecure,
+		licenseService: enterprise.NewLicenseService(secret),
+		cookieTTL:      cookieTTL, cookieSecure: cookieSecure,
 		frontendURL: strings.TrimRight(frontendURL, "/"), publicURL: strings.TrimRight(publicURL, "/"), legacyURL: strings.TrimRight(legacyURL, "/"),
 		mailer: mailer, storage: storage, maxUpload: maxUpload, pdfOCR: pdfOCR,
 	}
@@ -90,6 +93,9 @@ func (handler *Handler) Register(router gin.IRouter) {
 
 	protected.POST("/workspace/info", handler.workspaceInfo)
 	protected.POST("/workspace/entitlements", handler.entitlements)
+	protected.POST("/license/info", handler.licenseInfo)
+	protected.POST("/license/activate", handler.activateLicense)
+	protected.POST("/license/remove", handler.removeLicense)
 	protected.POST("/workspace/update", handler.updateWorkspace)
 	protected.POST("/workspace/members", handler.workspaceMembers)
 	protected.POST("/workspace/members/deactivate", handler.deactivateWorkspaceMember)
@@ -407,7 +413,7 @@ func (handler *Handler) workspaceInfo(c *gin.Context) {
 }
 
 func (handler *Handler) entitlements(c *gin.Context) {
-	writeData(c, http.StatusOK, gin.H{"cloud": false, "tier": "community", "features": []string{}})
+	writeData(c, http.StatusOK, handler.entitlementInfo(c))
 }
 
 func (handler *Handler) updateWorkspace(c *gin.Context) {
