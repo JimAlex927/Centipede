@@ -14,6 +14,7 @@ import (
 func (handler *Handler) registerExtraRoutes(router gin.IRouter) {
 	handler.registerPagePermissionRoutes(router)
 	handler.registerPageVerificationRoutes(router)
+	handler.registerTemplateRoutes(router)
 	router.POST("/api-keys", handler.apiKeys)
 	router.POST("/api-keys/create", handler.createAPIKey)
 	router.POST("/api-keys/update", handler.updateAPIKey)

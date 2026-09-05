@@ -145,6 +145,22 @@ corepack pnpm dev
 
 前端开发服务器会把 `/api`、`/collab` 和 `/realtime` 代理到 `http://localhost:7788`；生产构建使用 `pnpm build`，预览使用 `pnpm preview`。
 
+## License 生成
+
+使用 Go 命令生成签名 license。`-secret` 必须与后端配置中的
+`auth.jwt_secret` 一致；生成后可以在 Docmost 管理员的 License 页面激活，
+或调用 `/api/license/activate`。
+
+```powershell
+go run ./cmd/license `
+  -secret "<与 auth.jwt_secret 相同的密钥>" `
+  -customer "Example Inc." `
+  -seats 100 `
+  -type enterprise `
+  -days 365 `
+  -out license.txt
+```
+
 ## 常用命令
 
 ```powershell
