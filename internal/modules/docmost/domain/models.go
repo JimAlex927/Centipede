@@ -206,6 +206,19 @@ type SearchPage struct {
 	Space        *SpaceSummary `json:"space"`
 }
 
+type AttachmentSearch struct {
+	ID        string        `json:"id"`
+	FileName  string        `json:"fileName"`
+	PageID    string        `json:"pageId"`
+	CreatorID *string       `json:"creatorId"`
+	CreatedAt time.Time     `json:"createdAt"`
+	UpdatedAt time.Time     `json:"updatedAt"`
+	Rank      float32       `json:"rank"`
+	Highlight string        `json:"highlight"`
+	Space     *SpaceSummary `json:"space"`
+	Page      *PageSummary  `json:"page"`
+}
+
 type Label struct {
 	ID          string    `json:"id"`
 	Name        string    `json:"name"`

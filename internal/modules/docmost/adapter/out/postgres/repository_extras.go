@@ -659,6 +659,47 @@ LIMIT $4`, workspaceID, query, spaceID, normalizeLimit(limit), viewerID, viewerA
 	return items, rows.Err()
 }
 
+func (repository *Repository) SearchAttachments(ctx context.Context, workspaceID, query string, spaceID *string, limit int, viewerID string, viewerAdmin bool) ([]domain.AttachmentSearch, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return []domain.AttachmentSearch{}, nil
+	}
+	rows, err := repository.db.Query(ctx, `
+SELECT a.id::text, a.file_name, a.page_id::text, a.creator_id::text,
+ a.created_at, a.updated_at, similarity(COALESCE(a.file_name, ''), $2)::real,
+ ts_headline('simple', COALESCE(a.text_content, ''), plainto_tsquery('simple', $2)),
+ s.id::text, s.name, s.slug,
+ p.id::text, p.slug_id, p.title, p.icon, COALESCE(p.is_base, false), p.space_id::text
+FROM attachments a
+JOIN pages p ON p.id = a.page_id
+JOIN spaces s ON s.id = p.space_id
+WHERE a.workspace_id = $1 AND a.type = 'file' AND a.deleted_at IS NULL
+  AND p.deleted_at IS NULL AND ($3::uuid IS NULL OR p.space_id = $3)
+  AND `+strings.NewReplacer("$8", "$4", "$9", "$5").Replace(pageListAccessSQL)+`
+  AND (COALESCE(a.file_name, '') ILIKE '%' || $2 || '%'
+       OR COALESCE(a.text_content, '') ILIKE '%' || $2 || '%')
+ORDER BY similarity(COALESCE(a.file_name, ''), $2) DESC, a.updated_at DESC
+LIMIT $6`, workspaceID, query, spaceID, viewerID, viewerAdmin, normalizeLimit(limit))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]domain.AttachmentSearch, 0)
+	for rows.Next() {
+		var item domain.AttachmentSearch
+		var space domain.SpaceSummary
+		var page domain.PageSummary
+		if err := rows.Scan(&item.ID, &item.FileName, &item.PageID, &item.CreatorID, &item.CreatedAt, &item.UpdatedAt, &item.Rank, &item.Highlight,
+			&space.ID, &space.Name, &space.Slug, &page.ID, &page.SlugID, &page.Title, &page.Icon, &page.IsBase, &page.SpaceID); err != nil {
+			return nil, err
+		}
+		item.Space = &space
+		item.Page = &page
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func (repository *Repository) SearchSharedPages(ctx context.Context, shareID, query string, limit int) ([]domain.SearchPage, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {

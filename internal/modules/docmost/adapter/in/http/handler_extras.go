@@ -54,6 +54,7 @@ func (handler *Handler) registerExtraRoutes(router gin.IRouter) {
 
 	router.POST("/search", handler.search)
 	router.POST("/search/suggest", handler.suggest)
+	router.POST("/search-attachments", handler.searchAttachments)
 }
 
 type fileTaskRequest struct {
@@ -932,6 +933,20 @@ type searchRequest struct {
 	IncludeUsers  *bool   `json:"includeUsers"`
 	IncludeGroups *bool   `json:"includeGroups"`
 	IncludePages  *bool   `json:"includePages"`
+}
+
+func (handler *Handler) searchAttachments(c *gin.Context) {
+	var request searchRequest
+	if !decodeOptional(c, &request) {
+		return
+	}
+	current := currentPrincipal(c)
+	items, err := handler.repository.SearchAttachments(c.Request.Context(), current.Workspace.ID, request.Query, request.SpaceID, request.Limit, current.User.ID, isAdmin(current.User))
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to search attachments")
+		return
+	}
+	writeData(c, http.StatusOK, gin.H{"items": items})
 }
 
 func (handler *Handler) search(c *gin.Context) {
