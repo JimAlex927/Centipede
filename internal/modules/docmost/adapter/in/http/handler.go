@@ -107,6 +107,7 @@ func (handler *Handler) Register(router gin.IRouter) {
 	api.POST("/workspace/invites/info", handler.invitationInfo)
 	api.POST("/workspace/invites/accept", handler.acceptInvitation)
 	api.POST("/shares/info", handler.shareInfo)
+	api.POST("/pdf-export/render", handler.pdfRender)
 	api.POST("/shares/page-info", handler.sharedPageInfo)
 	api.POST("/shares/tree", handler.shareTree)
 	api.POST("/search/share-search", handler.shareSearch)
