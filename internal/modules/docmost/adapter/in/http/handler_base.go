@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -321,8 +322,18 @@ func (handler *Handler) baseRows(c *gin.Context) {
 	if _, ok := handler.loadBasePage(c, request.PageID, "reader"); !ok {
 		return
 	}
-	result, err := handler.repository.BaseRows(c.Request.Context(), request.PageID, currentPrincipal(c).Workspace.ID, request.Cursor, request.Limit)
+	var result domain.Pagination[postgres.BaseRow]
+	var err error
+	if len(request.Filter) > 0 || len(request.Sorts) > 0 {
+		result, err = handler.repository.BaseRowsWithOptions(c.Request.Context(), request.PageID, currentPrincipal(c).Workspace.ID, request.Cursor, request.Limit, request.Filter, request.Sorts)
+	} else {
+		result, err = handler.repository.BaseRows(c.Request.Context(), request.PageID, currentPrincipal(c).Workspace.ID, request.Cursor, request.Limit)
+	}
 	if err != nil {
+		if errors.Is(err, postgres.ErrInvalidInput) {
+			writeError(c, http.StatusBadRequest, "Invalid base view filter or sort")
+			return
+		}
 		writeError(c, http.StatusInternalServerError, "Failed to load rows")
 		return
 	}

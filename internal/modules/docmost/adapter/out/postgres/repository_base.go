@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -310,6 +312,416 @@ FROM base_rows WHERE page_id = $1 AND workspace_id = $2 AND deleted_at IS NULL
 		result.Meta.NextCursor = &next
 	}
 	return result, nil
+}
+
+// BaseRowsWithOptions is the view-aware rows endpoint. View filters and sorts
+// are stored as JSON in base_views, so evaluating them here keeps the API
+// compatible with the client while allowing the storage model to evolve.
+// The unfiltered path above remains the fast, indexed cursor query.
+func (repository *Repository) BaseRowsWithOptions(ctx context.Context, pageID, workspaceID, cursor string, limit int, filterJSON, sortsJSON json.RawMessage) (domain.Pagination[BaseRow], error) {
+	limit = normalizeLimit(limit)
+	rows, err := repository.db.Query(ctx, `
+SELECT id::text, page_id::text, COALESCE(cells, '{}'::jsonb), position, creator_id::text,
+       last_updated_by_id::text, workspace_id::text, created_at, updated_at
+FROM base_rows WHERE page_id = $1 AND workspace_id = $2 AND deleted_at IS NULL
+ORDER BY position COLLATE "C", id LIMIT 10000`, pageID, workspaceID)
+	if err != nil {
+		return domain.Pagination[BaseRow]{}, err
+	}
+	defer rows.Close()
+	items := make([]BaseRow, 0)
+	for rows.Next() {
+		var item BaseRow
+		if err := rows.Scan(&item.ID, &item.PageID, &item.Cells, &item.Position, &item.CreatorID, &item.LastUpdatedByID, &item.WorkspaceID, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			return domain.Pagination[BaseRow]{}, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return domain.Pagination[BaseRow]{}, err
+	}
+	filter, err := decodeBaseFilter(filterJSON)
+	if err != nil {
+		return domain.Pagination[BaseRow]{}, err
+	}
+	for i := len(items) - 1; i >= 0; i-- {
+		if filter != nil && !baseFilterMatches(filter, items[i]) {
+			items = append(items[:i], items[i+1:]...)
+		}
+	}
+	sorts, err := decodeBaseSorts(sortsJSON)
+	if err != nil {
+		return domain.Pagination[BaseRow]{}, err
+	}
+	if len(sorts) > 0 {
+		sort.SliceStable(items, func(i, j int) bool {
+			return compareBaseRows(items[i], items[j], sorts) < 0
+		})
+	}
+	offset := 0
+	if strings.TrimSpace(cursor) != "" {
+		offset, err = strconv.Atoi(cursor)
+		if err != nil || offset < 0 {
+			return domain.Pagination[BaseRow]{}, ErrInvalidInput
+		}
+	}
+	if offset > len(items) {
+		offset = len(items)
+	}
+	end := offset + limit
+	if end > len(items) {
+		end = len(items)
+	}
+	pageItems := items[offset:end]
+	result := page(pageItems, limit)
+	result.Meta.HasPrevPage = offset > 0
+	result.Meta.HasNextPage = end < len(items)
+	if result.Meta.HasNextPage {
+		next := strconv.Itoa(end)
+		result.Meta.NextCursor = &next
+	}
+	return result, nil
+}
+
+type baseFilterNode struct {
+	PropertyID string
+	Op         string
+	Value      any
+	Children   []baseFilterNode
+}
+
+type baseSort struct {
+	PropertyID string
+	Direction  string
+}
+
+func decodeBaseFilter(raw json.RawMessage) (*baseFilterNode, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var wire struct {
+		PropertyID string            `json:"propertyId"`
+		Op         string            `json:"op"`
+		Value      json.RawMessage   `json:"value"`
+		Children   []json.RawMessage `json:"children"`
+	}
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		return nil, ErrInvalidInput
+	}
+	node := &baseFilterNode{PropertyID: strings.TrimSpace(wire.PropertyID), Op: strings.TrimSpace(wire.Op)}
+	if len(wire.Value) > 0 && string(wire.Value) != "null" {
+		if err := json.Unmarshal(wire.Value, &node.Value); err != nil {
+			return nil, ErrInvalidInput
+		}
+	}
+	for _, childRaw := range wire.Children {
+		child, err := decodeBaseFilter(childRaw)
+		if err != nil || child == nil {
+			return nil, ErrInvalidInput
+		}
+		node.Children = append(node.Children, *child)
+	}
+	if len(node.Children) == 0 && node.PropertyID == "" && node.Op == "" {
+		return nil, nil
+	}
+	if len(node.Children) == 0 && node.Op == "" {
+		return nil, ErrInvalidInput
+	}
+	return node, nil
+}
+
+func decodeBaseSorts(raw json.RawMessage) ([]baseSort, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var values []baseSort
+	if err := json.Unmarshal(raw, &values); err != nil {
+		return nil, ErrInvalidInput
+	}
+	for i := range values {
+		values[i].PropertyID = strings.TrimSpace(values[i].PropertyID)
+		values[i].Direction = strings.ToLower(strings.TrimSpace(values[i].Direction))
+		if values[i].PropertyID == "" || (values[i].Direction != "asc" && values[i].Direction != "desc") {
+			return nil, ErrInvalidInput
+		}
+	}
+	return values, nil
+}
+
+func baseFilterMatches(node *baseFilterNode, row BaseRow) bool {
+	if len(node.Children) > 0 {
+		if strings.ToLower(node.Op) == "or" {
+			for i := range node.Children {
+				if baseFilterMatches(&node.Children[i], row) {
+					return true
+				}
+			}
+			return false
+		}
+		for i := range node.Children {
+			if !baseFilterMatches(&node.Children[i], row) {
+				return false
+			}
+		}
+		return true
+	}
+	var cells map[string]any
+	if json.Unmarshal(row.Cells, &cells) != nil {
+		return false
+	}
+	return baseValueMatches(cells[node.PropertyID], node.Op, node.Value)
+}
+
+func baseValueMatches(actual any, operator string, expected any) bool {
+	operator = strings.TrimSpace(operator)
+	empty := baseValueEmpty(actual)
+	switch operator {
+	case "isEmpty":
+		return empty
+	case "isNotEmpty":
+		return !empty
+	}
+	if empty {
+		return false
+	}
+	actualText := strings.ToLower(strings.TrimSpace(fmt.Sprint(actual)))
+	expectedText := strings.ToLower(strings.TrimSpace(fmt.Sprint(expected)))
+	actualNumber, actualNumberOK := baseNumber(actual)
+	expectedNumber, expectedNumberOK := baseNumber(expected)
+	if operator == "any" || operator == "none" || operator == "all" {
+		values := baseValues(actual)
+		expectedValues := baseValues(expected)
+		matches := 0
+		for _, candidate := range expectedValues {
+			for _, value := range values {
+				if baseEqual(value, candidate) {
+					matches++
+					break
+				}
+			}
+		}
+		switch operator {
+		case "any":
+			return matches > 0
+		case "none":
+			return matches == 0
+		default:
+			return matches == len(expectedValues) && len(expectedValues) > 0
+		}
+	}
+	switch operator {
+	case "eq":
+		if leftTime, leftOK := baseTime(actual); leftOK {
+			if rightTime, rightOK := baseExpectedTime(expected); rightOK {
+				return leftTime.Format("2006-01-02") == rightTime.Format("2006-01-02")
+			}
+		}
+		return baseEqual(actual, expected)
+	case "neq":
+		if leftTime, leftOK := baseTime(actual); leftOK {
+			if rightTime, rightOK := baseExpectedTime(expected); rightOK {
+				return leftTime.Format("2006-01-02") != rightTime.Format("2006-01-02")
+			}
+		}
+		return !baseEqual(actual, expected)
+	case "contains":
+		if values := baseValues(actual); len(values) > 1 {
+			for _, value := range values {
+				if baseEqual(value, expected) {
+					return true
+				}
+			}
+		}
+		return strings.Contains(actualText, expectedText)
+	case "ncontains":
+		return !baseValueMatches(actual, "contains", expected)
+	case "startsWith":
+		return strings.HasPrefix(actualText, expectedText)
+	case "endsWith":
+		return strings.HasSuffix(actualText, expectedText)
+	case "gt", "gte", "lt", "lte":
+		if actualNumberOK && expectedNumberOK {
+			return compareBaseNumbers(actualNumber, expectedNumber, operator)
+		}
+		return compareBaseStrings(actualText, expectedText, operator)
+	case "before", "onOrBefore", "after", "onOrAfter":
+		actualTime, actualOK := baseTime(actual)
+		expectedTime, expectedOK := baseExpectedTime(expected)
+		if !actualOK || !expectedOK {
+			return false
+		}
+		switch operator {
+		case "before":
+			return actualTime.Before(expectedTime)
+		case "onOrBefore":
+			return !actualTime.After(expectedTime)
+		case "after":
+			return actualTime.After(expectedTime)
+		default:
+			return !actualTime.Before(expectedTime)
+		}
+	case "isWithin":
+		if value, ok := expected.(map[string]any); ok {
+			if mode, _ := value["mode"].(string); mode == "exact" {
+				expectedTime, expectedOK := baseExpectedTime(value)
+				actualTime, actualOK := baseTime(actual)
+				return actualOK && expectedOK && actualTime.Format("2006-01-02") == expectedTime.Format("2006-01-02")
+			}
+			preset, _ := value["preset"].(string)
+			start, end := baseDateRange(preset, time.Now())
+			actualTime, actualOK := baseTime(actual)
+			return actualOK && !actualTime.Before(start) && actualTime.Before(end)
+		}
+	}
+	return false
+}
+
+func baseValueEmpty(value any) bool {
+	if value == nil {
+		return true
+	}
+	if text, ok := value.(string); ok {
+		return strings.TrimSpace(text) == ""
+	}
+	if values, ok := value.([]any); ok {
+		return len(values) == 0
+	}
+	return false
+}
+
+func baseValues(value any) []any {
+	if values, ok := value.([]any); ok {
+		return values
+	}
+	return []any{value}
+}
+
+func baseEqual(left, right any) bool {
+	if leftNumber, leftOK := baseNumber(left); leftOK {
+		if rightNumber, rightOK := baseNumber(right); rightOK {
+			return leftNumber == rightNumber
+		}
+	}
+	return strings.EqualFold(strings.TrimSpace(fmt.Sprint(left)), strings.TrimSpace(fmt.Sprint(right)))
+}
+
+func baseNumber(value any) (float64, bool) {
+	switch typed := value.(type) {
+	case float64:
+		return typed, true
+	case int:
+		return float64(typed), true
+	case string:
+		number, err := strconv.ParseFloat(strings.TrimSpace(typed), 64)
+		return number, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func compareBaseNumbers(left, right float64, operator string) bool {
+	switch operator {
+	case "gt":
+		return left > right
+	case "gte":
+		return left >= right
+	case "lt":
+		return left < right
+	default:
+		return left <= right
+	}
+}
+
+func compareBaseStrings(left, right, operator string) bool {
+	switch operator {
+	case "gt":
+		return left > right
+	case "gte":
+		return left >= right
+	case "lt":
+		return left < right
+	default:
+		return left <= right
+	}
+}
+
+func baseTime(value any) (time.Time, bool) {
+	text := strings.TrimSpace(fmt.Sprint(value))
+	for _, layout := range []string{time.RFC3339Nano, "2006-01-02", "2006-01-02 15:04:05"} {
+		if parsed, err := time.Parse(layout, text); err == nil {
+			return parsed, true
+		}
+	}
+	return time.Time{}, false
+}
+
+func baseExpectedTime(value any) (time.Time, bool) {
+	if object, ok := value.(map[string]any); ok {
+		if date, dateOK := object["date"].(string); dateOK {
+			return baseTime(date)
+		}
+		if preset, presetOK := object["preset"].(string); presetOK {
+			start, _ := baseDateRange(preset, time.Now())
+			return start, true
+		}
+	}
+	return baseTime(value)
+}
+
+func baseDateRange(preset string, now time.Time) (time.Time, time.Time) {
+	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	switch preset {
+	case "today":
+		return start, start.AddDate(0, 0, 1)
+	case "tomorrow":
+		return start.AddDate(0, 0, 1), start.AddDate(0, 0, 2)
+	case "yesterday":
+		return start.AddDate(0, 0, -1), start
+	case "pastWeek":
+		return start.AddDate(0, 0, -7), start.AddDate(0, 0, 1)
+	case "pastMonth":
+		return start.AddDate(0, -1, 0), start.AddDate(0, 0, 1)
+	case "pastYear":
+		return start.AddDate(-1, 0, 0), start.AddDate(0, 0, 1)
+	case "nextWeek":
+		return start.AddDate(0, 0, 1), start.AddDate(0, 0, 8)
+	case "nextMonth":
+		return start.AddDate(0, 1, 0), start.AddDate(0, 1, 1)
+	case "nextYear":
+		return start.AddDate(1, 0, 0), start.AddDate(1, 0, 1)
+	default:
+		return start, start.AddDate(0, 0, 1)
+	}
+}
+
+func compareBaseRows(left, right BaseRow, sorts []baseSort) int {
+	var leftCells, rightCells map[string]any
+	_ = json.Unmarshal(left.Cells, &leftCells)
+	_ = json.Unmarshal(right.Cells, &rightCells)
+	for _, config := range sorts {
+		leftText := strings.ToLower(fmt.Sprint(leftCells[config.PropertyID]))
+		rightText := strings.ToLower(fmt.Sprint(rightCells[config.PropertyID]))
+		result := strings.Compare(leftText, rightText)
+		if leftNumber, leftOK := baseNumber(leftCells[config.PropertyID]); leftOK {
+			if rightNumber, rightOK := baseNumber(rightCells[config.PropertyID]); rightOK {
+				switch {
+				case leftNumber < rightNumber:
+					result = -1
+				case leftNumber > rightNumber:
+					result = 1
+				default:
+					result = 0
+				}
+			}
+		}
+		if result != 0 {
+			if config.Direction == "desc" {
+				return -result
+			}
+			return result
+		}
+	}
+	return strings.Compare(left.ID, right.ID)
 }
 
 func (repository *Repository) BaseRowByID(ctx context.Context, pageID, rowID, workspaceID string) (BaseRow, error) {
