@@ -65,13 +65,13 @@ func NewRouter(cfg config.Config, database *pgxpool.Pool, logger *zap.Logger) ht
 		cfg.AI,
 		cfg.PDFOCR,
 	)
-	collaborationHandler := docmosthttp.NewCollaborationHandler(docmostRepository, cfg.Auth.JWTSecret, cfg.Server.CORSOrigins)
+	collaborationHandler := docmosthttp.NewCollaborationHandler(docmostRepository, cfg.Auth.JWTSecret, allowedOrigins)
 	engine.Any("/collab/:room", gin.WrapH(collaborationHandler))
 	engine.GET("/api/collab/stats", func(c *gin.Context) {
 		connections, documents := collaborationHandler.Stats()
 		c.JSON(http.StatusOK, gin.H{"connections": connections, "documents": documents})
 	})
-	realtimeHandler := docmosthttp.NewRealtimeHandler(docmostRepository, cfg.Auth.JWTSecret, cfg.Server.CORSOrigins)
+	realtimeHandler := docmosthttp.NewRealtimeHandler(docmostRepository, cfg.Auth.JWTSecret, allowedOrigins)
 	docmostHandler.SetRealtimeHandler(realtimeHandler)
 	collaborationHandler.SetRealtimeHandler(realtimeHandler)
 	engine.GET("/realtime", gin.WrapH(realtimeHandler))
