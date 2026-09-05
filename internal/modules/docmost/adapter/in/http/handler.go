@@ -68,7 +68,7 @@ func (handler *Handler) Register(router gin.IRouter) {
 	api.POST("/search/share-search", handler.shareSearch)
 	api.POST("/shares/transclusion/lookup", handler.shareTransclusionLookup)
 	api.GET("/files/public/:fileId/:fileName", handler.getPublicFile)
-	api.GET("/attachments/img/:attachmentId/:fileName", handler.getPublicImage)
+	api.GET("/attachments/img/:attachmentType/:fileName", handler.getPublicImage)
 	api.POST("/version", handler.version)
 
 	protected := api.Group("")

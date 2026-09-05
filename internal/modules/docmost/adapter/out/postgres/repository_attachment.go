@@ -68,6 +68,14 @@ AND a.mime_type IN ('image/png', 'image/jpeg', 'image/gif', 'image/webp')
 AND a.deleted_at IS NULL`, attachmentID))
 }
 
+func (repository *Repository) AttachmentByPublicImagePath(ctx context.Context, attachmentType, fileName, workspaceID string) (domain.Attachment, error) {
+	return scanAttachment(repository.db.QueryRow(ctx, `SELECT `+attachmentColumns+` FROM attachments a
+JOIN workspaces w ON w.id = a.workspace_id AND w.deleted_at IS NULL
+WHERE a.type = $1 AND a.file_name = $2 AND a.workspace_id = $3
+AND a.mime_type IN ('image/png', 'image/jpeg', 'image/gif', 'image/webp')
+AND a.deleted_at IS NULL`, attachmentType, fileName, workspaceID))
+}
+
 func (repository *Repository) CreateAttachment(ctx context.Context, input AttachmentInput) (domain.Attachment, error) {
 	_, err := repository.db.Exec(ctx, `INSERT INTO attachments
 (id, file_name, file_path, file_size, file_ext, mime_type, type, creator_id, page_id, space_id, workspace_id)

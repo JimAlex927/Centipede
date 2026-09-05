@@ -201,11 +201,11 @@ func (handler *Handler) uploadImage(c *gin.Context) {
 	attachment.URL = handler.imageURL(c, attachment)
 	switch attachmentType {
 	case "avatar":
-		err = handler.repository.SetUserAvatar(c.Request.Context(), current.User.ID, current.Workspace.ID, attachment.URL)
+		err = handler.repository.SetUserAvatar(c.Request.Context(), current.User.ID, current.Workspace.ID, attachment.FileName)
 	case "space-icon":
-		err = handler.repository.SetSpaceLogo(c.Request.Context(), spaceID, current.Workspace.ID, attachment.URL)
+		err = handler.repository.SetSpaceLogo(c.Request.Context(), spaceID, current.Workspace.ID, attachment.FileName)
 	case "workspace-icon":
-		err = handler.repository.SetWorkspaceLogo(c.Request.Context(), current.Workspace.ID, attachment.URL)
+		err = handler.repository.SetWorkspaceLogo(c.Request.Context(), current.Workspace.ID, attachment.FileName)
 	}
 	if err != nil {
 		_ = handler.repository.DeleteAttachment(c.Request.Context(), attachment.ID, current.Workspace.ID)
@@ -307,11 +307,23 @@ func (handler *Handler) getPublicFile(c *gin.Context) {
 }
 
 func (handler *Handler) getPublicImage(c *gin.Context) {
-	attachmentID := c.Param("attachmentId")
-	// The attachment id is globally random and the query is restricted to
-	// icon/avatar types intentionally published by their owners.
-	attachment, err := handler.repository.AttachmentByPublicImageID(c.Request.Context(), attachmentID)
-	if err != nil || c.Param("fileName") != attachment.FileName {
+	attachmentKey := c.Param("attachmentType")
+	fileName := c.Param("fileName")
+	var attachment domain.Attachment
+	var err error
+	if looksLikeUUID(attachmentKey) {
+		// Keep serving URLs produced by older Go builds while stored avatar/logo
+		// values and newly generated URLs follow the Node-compatible format.
+		attachment, err = handler.repository.AttachmentByPublicImageID(c.Request.Context(), attachmentKey)
+	} else {
+		workspace, workspaceErr := handler.repository.OnlyWorkspace(c.Request.Context())
+		if workspaceErr != nil {
+			err = workspaceErr
+		} else {
+			attachment, err = handler.repository.AttachmentByPublicImagePath(c.Request.Context(), attachmentKey, fileName, workspace.ID)
+		}
+	}
+	if err != nil || fileName != attachment.FileName {
 		writeError(c, http.StatusNotFound, "Image not found")
 		return
 	}
@@ -394,7 +406,11 @@ func (handler *Handler) fileURL(c *gin.Context, attachment domain.Attachment) st
 }
 
 func (handler *Handler) imageURL(c *gin.Context, attachment domain.Attachment) string {
-	return handler.backendURL(c) + "/api/attachments/img/" + url.PathEscape(attachment.ID) + "/" + url.PathEscape(attachment.FileName)
+	attachmentType := "file"
+	if attachment.Type != nil && *attachment.Type != "" {
+		attachmentType = *attachment.Type
+	}
+	return handler.backendURL(c) + "/api/attachments/img/" + url.PathEscape(attachmentType) + "/" + url.PathEscape(attachment.FileName)
 }
 
 func (handler *Handler) backendURL(c *gin.Context) string {
@@ -451,6 +467,24 @@ func randomUUID() (string, error) {
 	buffer[8] = (buffer[8] & 0x3f) | 0x80
 	encoded := hex.EncodeToString(buffer)
 	return encoded[0:8] + "-" + encoded[8:12] + "-" + encoded[12:16] + "-" + encoded[16:20] + "-" + encoded[20:32], nil
+}
+
+func looksLikeUUID(value string) bool {
+	if len(value) != 36 {
+		return false
+	}
+	for index, character := range value {
+		if index == 8 || index == 13 || index == 18 || index == 23 {
+			if character != '-' {
+				return false
+			}
+			continue
+		}
+		if !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f') || (character >= 'A' && character <= 'F')) {
+			return false
+		}
+	}
+	return true
 }
 
 func containsFold(items []string, target string) bool {
