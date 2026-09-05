@@ -83,6 +83,30 @@ func TestMarkdownImageImport(t *testing.T) {
 	}
 }
 
+func TestMarkdownInternalLinkImport(t *testing.T) {
+	nodes := markdownInline("See [the guide](guide.md) for details")
+	if len(nodes) != 3 || len(nodes[1].Marks) != 1 || nodes[1].Marks[0].Type != "link" {
+		t.Fatalf("markdown link was not parsed: %#v", nodes)
+	}
+	pageIDs := map[string]string{"docs/guide.md": "guide-page"}
+	rewriteZipInternalLinks(&nodes, "docs/index.md", "general", pageIDs)
+	mark := nodes[1].Marks[0]
+	if mark.Attrs["href"] != "/s/general/p/guide-page" || mark.Attrs["internal"] != true {
+		t.Fatalf("internal link was not rewritten: %#v", mark)
+	}
+}
+
+func TestZipEncodedPathAndMetadataLookup(t *testing.T) {
+	icon := "📘"
+	metadata := &zipImportMetadata{Pages: map[string]zipImportPageMetadata{
+		"docs/My%20Page.md": {Position: "a1", Icon: &icon},
+	}}
+	value := zipImportPageMetadataForPath(metadata, "docs/My Page.md")
+	if value.Position != "a1" || value.Icon == nil || *value.Icon != icon {
+		t.Fatalf("encoded metadata path was not resolved: %#v", value)
+	}
+}
+
 func TestZipImportSources(t *testing.T) {
 	for _, source := range []string{"generic", "notion", "confluence"} {
 		if !isSupportedZipImportSource(source) {

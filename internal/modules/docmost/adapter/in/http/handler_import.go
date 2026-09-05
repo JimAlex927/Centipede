@@ -642,6 +642,20 @@ func markdownInline(value string) []importNode {
 				}
 			}
 		}
+		if strings.HasPrefix(value, "[") {
+			if closeLabel := strings.Index(value[1:], "]("); closeLabel >= 0 {
+				closeLabel++
+				if closeURL := strings.Index(value[closeLabel+2:], ")"); closeURL >= 0 {
+					closeURL += closeLabel + 2
+					result = append(result, importNode{
+						Type: "text", Text: value[1:closeLabel],
+						Marks: []importMark{{Type: "link", Attrs: map[string]any{"href": strings.TrimSpace(value[closeLabel+2 : closeURL])}}},
+					})
+					value = value[closeURL+1:]
+					continue
+				}
+			}
+		}
 		start := len(value)
 		selected := struct{ token, kind string }{}
 		for _, candidate := range tokens {
@@ -650,6 +664,9 @@ func markdownInline(value string) []importNode {
 			}
 		}
 		if index := strings.Index(value, "!["); index >= 0 && index < start {
+			start = index
+		}
+		if index := strings.Index(value, "["); index >= 0 && index < start {
 			start = index
 		}
 		if start == len(value) {

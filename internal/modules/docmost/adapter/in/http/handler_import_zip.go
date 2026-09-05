@@ -29,6 +29,20 @@ type zipImportEntry struct {
 	File *zip.File
 }
 
+type zipImportPageMetadata struct {
+	PageID     string  `json:"pageId"`
+	SlugID     string  `json:"slugId"`
+	Icon       *string `json:"icon"`
+	Position   string  `json:"position"`
+	ParentPath *string `json:"parentPath"`
+}
+
+type zipImportMetadata struct {
+	Source  string                           `json:"source"`
+	Version string                           `json:"version"`
+	Pages   map[string]zipImportPageMetadata `json:"pages"`
+}
+
 const maxImportedAttachmentSize = 30 * 1024 * 1024
 
 func (handler *Handler) importZip(c *gin.Context) {
@@ -152,6 +166,11 @@ func (handler *Handler) processGenericZip(ctx context.Context, data []byte, spac
 	if len(entries) == 0 {
 		return errors.New("ZIP contains no supported document pages")
 	}
+	metadata, err := readZipImportMetadata(assets["docmost-metadata.json"])
+	if err != nil {
+		return err
+	}
+	delete(assets, "docmost-metadata.json")
 	sort.Slice(entries, func(left, right int) bool {
 		return zipPathDepth(entries[left].Path) < zipPathDepth(entries[right].Path) || (zipPathDepth(entries[left].Path) == zipPathDepth(entries[right].Path) && entries[left].Path < entries[right].Path)
 	})
@@ -169,21 +188,76 @@ func (handler *Handler) processGenericZip(ctx context.Context, data []byte, spac
 		}
 		return zipPathDepth(directoriesList[left]) < zipPathDepth(directoriesList[right]) || (zipPathDepth(directoriesList[left]) == zipPathDepth(directoriesList[right]) && directoriesList[left] < directoriesList[right])
 	})
+	mergedEntryDirectories := make(map[string]string)
 	if source == "notion" {
+		beforeMerge := make([]string, len(entries))
+		for index := range entries {
+			beforeMerge[index] = entries[index].Path
+		}
 		mergeNotionFolderPages(&entries, directoriesList)
+		for index, entry := range entries {
+			if beforeMerge[index] != entry.Path {
+				directory := strings.TrimSuffix(entry.Path, ".md")
+				if strings.HasSuffix(entry.Path, ".html") {
+					directory = strings.TrimSuffix(entry.Path, ".html")
+				}
+				mergedEntryDirectories[entry.Path] = directory
+			}
+		}
 	}
 	pageByPath := make(map[string]string)
 	for _, directory := range directoriesList {
 		if isSingleZipRootDirectory(directory, directoriesList, entries) {
 			continue
 		}
+		if _, merged := mergedEntryDirectories[directory+".md"]; merged {
+			continue
+		}
+		if _, merged := mergedEntryDirectories[directory+".html"]; merged {
+			continue
+		}
 		title := zipImportTitle(pathpkg.Base(directory), source)
-		page, createErr := handler.repository.CreatePage(ctx, current.Workspace.ID, current.User.ID, postgres.PageInput{Title: &title, SpaceID: &spaceID, ParentPageID: optionalString(pageByPath[pathpkg.Dir(directory)]), Content: []byte(`{"type":"doc","content":[]}`)})
+		pageMetadata := zipImportPageMetadataForPath(metadata, directory+".md")
+		page, createErr := handler.repository.CreatePage(ctx, current.Workspace.ID, current.User.ID, postgres.PageInput{
+			Title: &title, Icon: pageMetadata.Icon, Position: optionalString(pageMetadata.Position),
+			SpaceID: &spaceID, ParentPageID: optionalString(pageByPath[pathpkg.Dir(directory)]), Content: []byte(`{"type":"doc","content":[]}`),
+		})
 		if createErr != nil {
 			return createErr
 		}
 		pageByPath[directory] = page.ID
 	}
+
+	space, spaceErr := handler.repository.SpaceByID(ctx, spaceID, current.Workspace.ID, current.User.ID)
+	if spaceErr != nil {
+		return spaceErr
+	}
+	pageByEntryPath := make(map[string]string, len(entries))
+	pageByPathToID := make(map[string]string, len(entries)+len(pageByPath))
+	for directory, pageID := range pageByPath {
+		pageByPathToID[directory] = pageID
+	}
+	for _, entry := range entries {
+		pageMetadata := zipImportPageMetadataForPath(metadata, entry.Path)
+		logicalDirectory := pathpkg.Dir(entry.Path)
+		if mergedDirectory, ok := mergedEntryDirectories[entry.Path]; ok {
+			logicalDirectory = pathpkg.Dir(mergedDirectory)
+		}
+		title := zipImportTitle(strings.TrimSuffix(pathpkg.Base(entry.Path), filepath.Ext(entry.Path)), source)
+		page, createErr := handler.repository.CreatePage(ctx, current.Workspace.ID, current.User.ID, postgres.PageInput{
+			Title: &title, Icon: pageMetadata.Icon, Position: optionalString(pageMetadata.Position),
+			SpaceID: &spaceID, ParentPageID: optionalString(pageByPath[logicalDirectory]), Content: []byte(`{"type":"doc","content":[]}`),
+		})
+		if createErr != nil {
+			return createErr
+		}
+		pageByEntryPath[entry.Path] = page.ID
+		pageByPathToID[entry.Path] = page.ID
+		if mergedDirectory, ok := mergedEntryDirectories[entry.Path]; ok {
+			pageByPathToID[mergedDirectory] = page.ID
+		}
+	}
+
 	for _, entry := range entries {
 		reader, openErr := entry.File.Open()
 		if openErr != nil {
@@ -194,23 +268,19 @@ func (handler *Handler) processGenericZip(ctx context.Context, data []byte, spac
 		if parseErr != nil {
 			return parseErr
 		}
-		title, nodes := extractImportedTitle(nodes, zipImportTitle(strings.TrimSuffix(pathpkg.Base(entry.Path), filepath.Ext(entry.Path)), source))
-		content, marshalErr := json.Marshal(importNode{Type: "doc", Content: nodes})
-		if marshalErr != nil {
-			return marshalErr
+		rewriteZipInternalLinks(&nodes, entry.Path, space.Slug, pageByPathToID)
+		pageID := pageByEntryPath[entry.Path]
+		if pageID == "" {
+			return errors.New("imported page was not allocated")
 		}
-		page, createErr := handler.repository.CreatePage(ctx, current.Workspace.ID, current.User.ID, postgres.PageInput{Title: &title, SpaceID: &spaceID, ParentPageID: optionalString(pageByPath[pathpkg.Dir(entry.Path)]), Content: content})
-		if createErr != nil {
-			return createErr
-		}
-		if err := handler.importZipAttachments(ctx, page.ID, page.SpaceID, entry.Path, source, nodes, assets, current); err != nil {
+		if err := handler.importZipAttachments(ctx, pageID, spaceID, entry.Path, source, nodes, assets, current); err != nil {
 			return err
 		}
 		updatedContent, marshalErr := json.Marshal(importNode{Type: "doc", Content: nodes})
 		if marshalErr != nil {
 			return marshalErr
 		}
-		if _, updateErr := handler.repository.UpdatePage(ctx, page.ID, current.Workspace.ID, current.User.ID, postgres.PageInput{Content: updatedContent}); updateErr != nil {
+		if _, updateErr := handler.repository.UpdatePage(ctx, pageByEntryPath[entry.Path], current.Workspace.ID, current.User.ID, postgres.PageInput{Content: updatedContent}); updateErr != nil {
 			return updateErr
 		}
 	}
@@ -224,6 +294,96 @@ func isSupportedZipDocumentExtension(extension string) bool {
 	default:
 		return false
 	}
+}
+
+func readZipImportMetadata(file *zip.File) (*zipImportMetadata, error) {
+	if file == nil {
+		return nil, nil
+	}
+	reader, err := file.Open()
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+	var metadata zipImportMetadata
+	if err := json.NewDecoder(io.LimitReader(reader, 2*1024*1024)).Decode(&metadata); err != nil {
+		return nil, errors.New("invalid docmost import metadata")
+	}
+	if metadata.Source != "docmost" || len(metadata.Pages) == 0 {
+		return nil, errors.New("unsupported docmost import metadata")
+	}
+	return &metadata, nil
+}
+
+func zipImportPageMetadataForPath(metadata *zipImportMetadata, path string) zipImportPageMetadata {
+	if metadata == nil {
+		return zipImportPageMetadata{}
+	}
+	if value, ok := metadata.Pages[zipEncodedPath(path)]; ok {
+		return value
+	}
+	if value, ok := metadata.Pages[path]; ok {
+		return value
+	}
+	return zipImportPageMetadata{}
+}
+
+func zipEncodedPath(value string) string {
+	parts := strings.Split(strings.Trim(value, "/"), "/")
+	for index := range parts {
+		parts[index] = url.PathEscape(parts[index])
+	}
+	return strings.Join(parts, "/")
+}
+
+func rewriteZipInternalLinks(nodes *[]importNode, currentPath, spaceSlug string, pageByPath map[string]string) {
+	if nodes == nil {
+		return
+	}
+	var walk func([]importNode)
+	walk = func(items []importNode) {
+		for index := range items {
+			node := &items[index]
+			for markIndex := range node.Marks {
+				mark := &node.Marks[markIndex]
+				if mark.Type != "link" || mark.Attrs == nil {
+					continue
+				}
+				href, ok := mark.Attrs["href"].(string)
+				if !ok {
+					continue
+				}
+				if target, fragment, ok := zipInternalLinkTarget(currentPath, href, pageByPath); ok {
+					mark.Attrs["href"] = "/s/" + url.PathEscape(spaceSlug) + "/p/" + url.PathEscape(target) + fragment
+					mark.Attrs["internal"] = true
+				}
+			}
+			walk(node.Content)
+		}
+	}
+	walk(*nodes)
+}
+
+func zipInternalLinkTarget(currentPath, href string, pageByPath map[string]string) (string, string, bool) {
+	parsed, err := url.Parse(strings.TrimSpace(href))
+	if err != nil || parsed.IsAbs() || parsed.Path == "" || strings.HasPrefix(parsed.Path, "/") {
+		return "", "", false
+	}
+	targetPath := strings.TrimPrefix(pathpkg.Clean(pathpkg.Join(pathpkg.Dir(currentPath), parsed.Path)), "./")
+	candidates := []string{targetPath}
+	if filepath.Ext(targetPath) == "" {
+		candidates = append(candidates, targetPath+".md", targetPath+".html")
+	}
+	for _, candidate := range candidates {
+		if pageID, ok := pageByPath[candidate]; ok {
+			fragment := ""
+			if parsed.Fragment != "" {
+				fragment = "#" + parsed.Fragment
+			}
+			return pageID, fragment, true
+		}
+	}
+	return "", "", false
 }
 
 func (handler *Handler) importZipAttachments(ctx context.Context, pageID, spaceID, pagePath, source string, nodes []importNode, assets map[string]*zip.File, current principal) error {
