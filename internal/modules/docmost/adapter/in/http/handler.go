@@ -670,14 +670,16 @@ func (handler *Handler) spaceInfo(c *gin.Context) {
 }
 
 type spaceRequest struct {
-	SpaceID     string          `json:"spaceId"`
-	Name        *string         `json:"name"`
-	Description *string         `json:"description"`
-	Slug        *string         `json:"slug"`
-	Logo        *string         `json:"logo"`
-	Visibility  *string         `json:"visibility"`
-	DefaultRole *string         `json:"defaultRole"`
-	Settings    json.RawMessage `json:"settings"`
+	SpaceID              string          `json:"spaceId"`
+	Name                 *string         `json:"name"`
+	Description          *string         `json:"description"`
+	Slug                 *string         `json:"slug"`
+	Logo                 *string         `json:"logo"`
+	Visibility           *string         `json:"visibility"`
+	DefaultRole          *string         `json:"defaultRole"`
+	Settings             json.RawMessage `json:"settings"`
+	DisablePublicSharing *bool           `json:"disablePublicSharing"`
+	AllowViewerComments  *bool           `json:"allowViewerComments"`
 }
 
 func (request spaceRequest) input() postgres.SpaceInput {
@@ -707,10 +709,35 @@ func (handler *Handler) updateSpace(c *gin.Context) {
 	if !handler.requireSpaceRole(c, request.SpaceID, "admin") {
 		return
 	}
-	space, err := handler.repository.UpdateSpace(c.Request.Context(), request.SpaceID, current.Workspace.ID, current.User.ID, request.input())
+	if request.DisablePublicSharing != nil && !handler.requireFeature(c, "security:settings") {
+		return
+	}
+	if request.AllowViewerComments != nil && !handler.requireFeature(c, "comment:viewer") {
+		return
+	}
+	existingSpace, err := handler.repository.SpaceByID(c.Request.Context(), request.SpaceID, current.Workspace.ID, current.User.ID)
 	if err != nil {
 		handler.writeRepositoryError(c, err, "Space not found")
 		return
+	}
+	settings := existingSpace.Settings
+	if len(request.Settings) > 0 {
+		settings = request.Settings
+	}
+	settings = setSpaceSetting(settings, request.DisablePublicSharing, "sharing", "disabled")
+	settings = setSpaceSetting(settings, request.AllowViewerComments, "comments", "allowViewerComments")
+	input := request.input()
+	input.Settings = settings
+	space, err := handler.repository.UpdateSpace(c.Request.Context(), request.SpaceID, current.Workspace.ID, current.User.ID, input)
+	if err != nil {
+		handler.writeRepositoryError(c, err, "Space not found")
+		return
+	}
+	if request.DisablePublicSharing != nil && *request.DisablePublicSharing {
+		if err := handler.repository.DeleteSharesBySpace(c.Request.Context(), request.SpaceID, current.Workspace.ID); err != nil {
+			writeError(c, http.StatusInternalServerError, "Failed to disable public sharing")
+			return
+		}
 	}
 	writeData(c, http.StatusOK, space)
 }

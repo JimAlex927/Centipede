@@ -195,6 +195,11 @@ func (repository *Repository) DeleteSharesByWorkspace(ctx context.Context, works
 	return err
 }
 
+func (repository *Repository) DeleteSharesBySpace(ctx context.Context, spaceID, workspaceID string) error {
+	_, err := repository.db.Exec(ctx, `DELETE FROM shares WHERE space_id = $1 AND workspace_id = $2`, spaceID, workspaceID)
+	return err
+}
+
 func (repository *Repository) Shares(ctx context.Context, workspaceID, userID string, workspaceAdmin bool, limit int) (domain.Pagination[domain.Share], error) {
 	rows, err := repository.db.Query(ctx, `SELECT `+shareColumns+`,
   p.id::text, p.slug_id, p.title, p.icon, COALESCE(p.is_base, false), p.space_id::text,

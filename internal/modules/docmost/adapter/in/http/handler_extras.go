@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"centipede/internal/modules/docmost/adapter/out/postgres"
+	"centipede/internal/modules/docmost/domain"
 
 	"github.com/gin-gonic/gin"
 )
@@ -553,7 +554,7 @@ func (handler *Handler) createComment(c *gin.Context) {
 		handler.writeRepositoryError(c, err, "Page not found")
 		return
 	}
-	if !handler.requirePageAccess(c, page, false) || !handler.requireSpaceRole(c, page.SpaceID, "writer") {
+	if !handler.requireCommentAccess(c, page) {
 		return
 	}
 	comment, err := handler.repository.CreateComment(c.Request.Context(), current.Workspace.ID, current.User.ID, postgres.CommentInput{PageID: page.ID, Content: normalizeJSON(request.Content), Selection: request.Selection, Type: request.Type, ParentCommentID: request.ParentCommentID, SpaceID: page.SpaceID})
@@ -608,6 +609,9 @@ func (handler *Handler) updateComment(c *gin.Context) {
 }
 
 func (handler *Handler) resolveComment(c *gin.Context) {
+	if !handler.requireFeature(c, "comment:resolution") {
+		return
+	}
 	var request commentRequest
 	if !decode(c, &request) {
 		return
@@ -639,6 +643,39 @@ func (handler *Handler) resolveComment(c *gin.Context) {
 		})
 	}
 	writeData(c, http.StatusOK, comment)
+}
+
+func (handler *Handler) requireCommentAccess(c *gin.Context, page domain.Page) bool {
+	if !handler.requirePageAccess(c, page, false) {
+		return false
+	}
+	current := currentPrincipal(c)
+	access, err := handler.repository.PageAccess(c.Request.Context(), page.ID, current.Workspace.ID, current.User.ID)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to verify page permission")
+		return false
+	}
+	if access.HasRestriction && access.CanEdit {
+		return true
+	}
+
+	if !access.HasRestriction {
+		role, roleErr := handler.repository.SpaceRole(c.Request.Context(), page.SpaceID, current.Workspace.ID, current.User.ID)
+		if roleErr == nil && (role == "writer" || role == "admin" || isAdmin(current.User)) {
+			return true
+		}
+	}
+
+	space, err := handler.repository.SpaceByID(c.Request.Context(), page.SpaceID, current.Workspace.ID, current.User.ID)
+	if err != nil {
+		handler.writeRepositoryError(c, err, "Space not found")
+		return false
+	}
+	if spaceAllowsViewerComments(space.Settings) {
+		return true
+	}
+	writeError(c, http.StatusForbidden, "Forbidden")
+	return false
 }
 
 func (handler *Handler) deleteComment(c *gin.Context) {
