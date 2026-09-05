@@ -337,7 +337,16 @@ func (handler *Handler) baseRows(c *gin.Context) {
 		writeError(c, http.StatusInternalServerError, "Failed to load rows")
 		return
 	}
-	writeData(c, http.StatusOK, result)
+	references, err := handler.repository.BaseRowReferences(c.Request.Context(), currentPrincipal(c).Workspace.ID, currentPrincipal(c).User.ID, result.Items)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to load row references")
+		return
+	}
+	writeData(c, http.StatusOK, gin.H{
+		"items":      result.Items,
+		"meta":       result.Meta,
+		"references": references,
+	})
 }
 
 func (handler *Handler) baseRowInfo(c *gin.Context) {

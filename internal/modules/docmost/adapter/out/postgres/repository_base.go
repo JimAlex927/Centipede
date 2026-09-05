@@ -59,6 +59,23 @@ type BaseRow struct {
 	UpdatedAt       time.Time       `json:"updatedAt"`
 }
 
+// BaseRowReferences contains the small set of users and pages needed to
+// render person/page cells without making one request per cell. It mirrors
+// the references object consumed by the separated frontend.
+type BaseRowReferences struct {
+	Users map[string]domain.UserSummary `json:"users"`
+	Pages map[string]BasePageReference  `json:"pages"`
+}
+
+type BasePageReference struct {
+	ID      string               `json:"id"`
+	SlugID  string               `json:"slugId"`
+	Title   *string              `json:"title"`
+	Icon    *string              `json:"icon"`
+	SpaceID string               `json:"spaceId"`
+	Space   *domain.SpaceSummary `json:"space"`
+}
+
 type BaseView struct {
 	ID          string          `json:"id"`
 	PageID      string          `json:"pageId"`
@@ -314,6 +331,137 @@ FROM base_rows WHERE page_id = $1 AND workspace_id = $2 AND deleted_at IS NULL
 	return result, nil
 }
 
+// BaseRowReferences resolves the references used by the returned page of
+// rows. Restricted pages are checked with the same access rules as the page
+// picker, so a reference cannot reveal a page the current user cannot open.
+func (repository *Repository) BaseRowReferences(ctx context.Context, workspaceID, userID string, rows []BaseRow) (BaseRowReferences, error) {
+	references := BaseRowReferences{
+		Users: make(map[string]domain.UserSummary),
+		Pages: make(map[string]BasePageReference),
+	}
+	if len(rows) == 0 {
+		return references, nil
+	}
+
+	propertiesByID := make(map[string]string)
+	propertyRows, err := repository.db.Query(ctx, `
+SELECT id::text, type FROM base_properties
+WHERE workspace_id = $1 AND deleted_at IS NULL AND type IN ('person', 'page')`, workspaceID)
+	if err != nil {
+		return BaseRowReferences{}, err
+	}
+	for propertyRows.Next() {
+		var id, propertyType string
+		if err := propertyRows.Scan(&id, &propertyType); err != nil {
+			propertyRows.Close()
+			return BaseRowReferences{}, err
+		}
+		propertiesByID[id] = propertyType
+	}
+	if err := propertyRows.Err(); err != nil {
+		propertyRows.Close()
+		return BaseRowReferences{}, err
+	}
+	propertyRows.Close()
+
+	userIDs := make(map[string]struct{})
+	pageIDs := make(map[string]struct{})
+	for _, row := range rows {
+		addBaseReferenceID(userIDs, row.CreatorID)
+		addBaseReferenceID(userIDs, row.LastUpdatedByID)
+		var cells map[string]any
+		if json.Unmarshal(row.Cells, &cells) != nil {
+			continue
+		}
+		for propertyID, propertyType := range propertiesByID {
+			values := baseValues(cells[propertyID])
+			for _, value := range values {
+				id, ok := value.(string)
+				if !ok || !looksLikeUUID(id) {
+					continue
+				}
+				if propertyType == "person" {
+					userIDs[id] = struct{}{}
+				} else {
+					pageIDs[id] = struct{}{}
+				}
+			}
+		}
+	}
+
+	if len(userIDs) > 0 {
+		ids := baseReferenceIDs(userIDs)
+		userRows, err := repository.db.Query(ctx, `
+SELECT id::text, name, avatar_url FROM users
+WHERE workspace_id = $1 AND id::text = ANY($2::text[])
+  AND deleted_at IS NULL AND deactivated_at IS NULL`, workspaceID, ids)
+		if err != nil {
+			return BaseRowReferences{}, err
+		}
+		for userRows.Next() {
+			var summary domain.UserSummary
+			if err := userRows.Scan(&summary.ID, &summary.Name, &summary.AvatarURL); err != nil {
+				userRows.Close()
+				return BaseRowReferences{}, err
+			}
+			references.Users[summary.ID] = summary
+		}
+		if err := userRows.Err(); err != nil {
+			userRows.Close()
+			return BaseRowReferences{}, err
+		}
+		userRows.Close()
+	}
+
+	if len(pageIDs) > 0 {
+		ids := baseReferenceIDs(pageIDs)
+		pageRows, err := repository.db.Query(ctx, `
+SELECT p.id::text, p.slug_id, p.title, p.icon, p.space_id::text,
+       s.id::text, s.slug, s.name
+FROM pages p LEFT JOIN spaces s ON s.id = p.space_id
+WHERE p.workspace_id = $1 AND p.id::text = ANY($2::text[]) AND p.deleted_at IS NULL`, workspaceID, ids)
+		if err != nil {
+			return BaseRowReferences{}, err
+		}
+		for pageRows.Next() {
+			var reference BasePageReference
+			var spaceID, spaceSlug string
+			var spaceName *string
+			if err := pageRows.Scan(&reference.ID, &reference.SlugID, &reference.Title, &reference.Icon, &reference.SpaceID, &spaceID, &spaceSlug, &spaceName); err != nil {
+				pageRows.Close()
+				return BaseRowReferences{}, err
+			}
+			access, accessErr := repository.PageAccess(ctx, reference.ID, workspaceID, userID)
+			if accessErr != nil || (access.HasRestriction && !access.CanAccess) {
+				continue
+			}
+			reference.Space = &domain.SpaceSummary{ID: spaceID, Slug: spaceSlug, Name: spaceName}
+			references.Pages[reference.ID] = reference
+		}
+		if err := pageRows.Err(); err != nil {
+			pageRows.Close()
+			return BaseRowReferences{}, err
+		}
+		pageRows.Close()
+	}
+	return references, nil
+}
+
+func addBaseReferenceID(ids map[string]struct{}, value *string) {
+	if value != nil && looksLikeUUID(*value) {
+		ids[*value] = struct{}{}
+	}
+}
+
+func baseReferenceIDs(ids map[string]struct{}) []string {
+	values := make([]string, 0, len(ids))
+	for id := range ids {
+		values = append(values, id)
+	}
+	sort.Strings(values)
+	return values
+}
+
 // BaseRowsWithOptions is the view-aware rows endpoint. View filters and sorts
 // are stored as JSON in base_views, so evaluating them here keeps the API
 // compatible with the client while allowing the storage model to evolve.
@@ -469,7 +617,27 @@ func baseFilterMatches(node *baseFilterNode, row BaseRow) bool {
 	if json.Unmarshal(row.Cells, &cells) != nil {
 		return false
 	}
-	return baseValueMatches(cells[node.PropertyID], node.Op, node.Value)
+	return baseValueMatches(baseRowValue(row, cells, node.PropertyID), node.Op, node.Value)
+}
+
+func baseRowValue(row BaseRow, cells map[string]any, propertyID string) any {
+	if value, ok := cells[propertyID]; ok {
+		return value
+	}
+	switch propertyID {
+	case "createdAt":
+		return row.CreatedAt
+	case "lastEditedAt":
+		return row.UpdatedAt
+	case "lastEditedBy":
+		if row.LastUpdatedByID != nil {
+			return *row.LastUpdatedByID
+		}
+		if row.CreatorID != nil {
+			return *row.CreatorID
+		}
+	}
+	return nil
 }
 
 func baseValueMatches(actual any, operator string, expected any) bool {
@@ -646,6 +814,15 @@ func compareBaseStrings(left, right, operator string) bool {
 }
 
 func baseTime(value any) (time.Time, bool) {
+	switch typed := value.(type) {
+	case time.Time:
+		return typed, true
+	case *time.Time:
+		if typed != nil {
+			return *typed, true
+		}
+		return time.Time{}, false
+	}
 	text := strings.TrimSpace(fmt.Sprint(value))
 	for _, layout := range []string{time.RFC3339Nano, "2006-01-02", "2006-01-02 15:04:05"} {
 		if parsed, err := time.Parse(layout, text); err == nil {
@@ -661,8 +838,7 @@ func baseExpectedTime(value any) (time.Time, bool) {
 			return baseTime(date)
 		}
 		if preset, presetOK := object["preset"].(string); presetOK {
-			start, _ := baseDateRange(preset, time.Now())
-			return start, true
+			return baseDateAnchor(preset, time.Now()), true
 		}
 	}
 	return baseTime(value)
@@ -683,6 +859,15 @@ func baseDateRange(preset string, now time.Time) (time.Time, time.Time) {
 		return start.AddDate(0, -1, 0), start.AddDate(0, 0, 1)
 	case "pastYear":
 		return start.AddDate(-1, 0, 0), start.AddDate(0, 0, 1)
+	case "thisWeek":
+		weekStart := start.AddDate(0, 0, -int((int(start.Weekday())+6)%7))
+		return weekStart, weekStart.AddDate(0, 0, 7)
+	case "thisMonth":
+		monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+		return monthStart, monthStart.AddDate(0, 1, 0)
+	case "thisYear":
+		yearStart := time.Date(now.Year(), time.January, 1, 0, 0, 0, 0, now.Location())
+		return yearStart, yearStart.AddDate(1, 0, 0)
 	case "nextWeek":
 		return start.AddDate(0, 0, 1), start.AddDate(0, 0, 8)
 	case "nextMonth":
@@ -694,16 +879,56 @@ func baseDateRange(preset string, now time.Time) (time.Time, time.Time) {
 	}
 }
 
+func baseDateAnchor(preset string, now time.Time) time.Time {
+	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	switch preset {
+	case "tomorrow":
+		return start.AddDate(0, 0, 1)
+	case "yesterday":
+		return start.AddDate(0, 0, -1)
+	case "oneWeekAgo":
+		return start.AddDate(0, 0, -7)
+	case "oneWeekFromNow":
+		return start.AddDate(0, 0, 7)
+	case "oneMonthAgo":
+		return start.AddDate(0, -1, 0)
+	case "oneMonthFromNow":
+		return start.AddDate(0, 1, 0)
+	default:
+		return start
+	}
+}
+
 func compareBaseRows(left, right BaseRow, sorts []baseSort) int {
 	var leftCells, rightCells map[string]any
 	_ = json.Unmarshal(left.Cells, &leftCells)
 	_ = json.Unmarshal(right.Cells, &rightCells)
 	for _, config := range sorts {
-		leftText := strings.ToLower(fmt.Sprint(leftCells[config.PropertyID]))
-		rightText := strings.ToLower(fmt.Sprint(rightCells[config.PropertyID]))
+		leftValue := baseRowValue(left, leftCells, config.PropertyID)
+		rightValue := baseRowValue(right, rightCells, config.PropertyID)
+		if leftTime, leftOK := baseTime(leftValue); leftOK {
+			if rightTime, rightOK := baseTime(rightValue); rightOK {
+				result := 0
+				switch {
+				case leftTime.Before(rightTime):
+					result = -1
+				case leftTime.After(rightTime):
+					result = 1
+				}
+				if result != 0 {
+					if config.Direction == "desc" {
+						return -result
+					}
+					return result
+				}
+				continue
+			}
+		}
+		leftText := strings.ToLower(fmt.Sprint(leftValue))
+		rightText := strings.ToLower(fmt.Sprint(rightValue))
 		result := strings.Compare(leftText, rightText)
-		if leftNumber, leftOK := baseNumber(leftCells[config.PropertyID]); leftOK {
-			if rightNumber, rightOK := baseNumber(rightCells[config.PropertyID]); rightOK {
+		if leftNumber, leftOK := baseNumber(leftValue); leftOK {
+			if rightNumber, rightOK := baseNumber(rightValue); rightOK {
 				switch {
 				case leftNumber < rightNumber:
 					result = -1
