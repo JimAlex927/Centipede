@@ -44,6 +44,13 @@ storage:
   data_dir: "./data"
   max_upload_bytes: 104857600
 
+# Optional OpenAI-compatible AI provider. Credentials can also be supplied in .env.
+# ai:
+#   base_url: "http://127.0.0.1:11434/v1"
+#   chat_model: "llama3.2"
+#   completion_model: "llama3.2"
+#   timeout: "60s"
+
 # Optional scanned-PDF OCR. Leave both command paths empty to keep OCR disabled.
 # pdf_ocr:
 #   tesseract_path: "tesseract"

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 )
@@ -15,6 +16,7 @@ type Config struct {
 	Auth        AuthConfig
 	Mail        MailConfig
 	Storage     StorageConfig
+	AI          AIConfig
 	PDFOCR      PDFOCRConfig
 	SSO         SSOConfig
 	Migration   MigrationConfig
@@ -34,6 +36,22 @@ type ServerConfig struct {
 type StorageConfig struct {
 	DataDir        string
 	MaxUploadBytes int64
+}
+
+// AIConfig is provider-agnostic at the HTTP boundary. The default Go client
+// speaks the OpenAI chat-completions protocol, which also works with most
+// self-hosted OpenAI-compatible gateways.
+type AIConfig struct {
+	Driver          string
+	BaseURL         string
+	APIKey          string
+	CompletionModel string
+	ChatModel       string
+	RequestTimeout  time.Duration
+}
+
+func (config AIConfig) Enabled() bool {
+	return strings.TrimSpace(config.BaseURL) != "" && strings.TrimSpace(config.ChatModel) != ""
 }
 
 // PDFOCRConfig enables OCR for image-only PDFs without making the Go service
@@ -122,6 +140,14 @@ type rawConfig struct {
 		DataDir        string `yaml:"data_dir"`
 		MaxUploadBytes int64  `yaml:"max_upload_bytes"`
 	} `yaml:"storage"`
+	AI struct {
+		Driver          string `yaml:"driver"`
+		BaseURL         string `yaml:"base_url"`
+		APIKey          string `yaml:"api_key"`
+		CompletionModel string `yaml:"completion_model"`
+		ChatModel       string `yaml:"chat_model"`
+		Timeout         string `yaml:"timeout"`
+	} `yaml:"ai"`
 	PDFOCR struct {
 		TesseractPath string `yaml:"tesseract_path"`
 		PDFToPNGPath  string `yaml:"pdftoppm_path"`
@@ -211,6 +237,31 @@ func (raw rawConfig) build(environment string) (Config, error) {
 			LegacyBaseURL:   strings.TrimRight(strings.TrimSpace(raw.Migration.LegacyBaseURL), "/"),
 			FrontendBaseURL: strings.TrimRight(strings.TrimSpace(raw.Migration.FrontendBaseURL), "/"),
 		},
+	}
+	aiTimeout := 60 * time.Second
+	if strings.TrimSpace(raw.AI.Timeout) != "" {
+		aiTimeout, err = parseDuration("ai.timeout", raw.AI.Timeout)
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	aiDriver := fallback(raw.AI.Driver, os.Getenv("AI_DRIVER"))
+	aiBaseURL := fallback(raw.AI.BaseURL, os.Getenv("OPENAI_API_URL"))
+	aiAPIKey := fallback(raw.AI.APIKey, os.Getenv("OPENAI_API_KEY"))
+	aiCompletionModel := fallback(raw.AI.CompletionModel, os.Getenv("AI_COMPLETION_MODEL"))
+	aiChatModel := fallback(raw.AI.ChatModel, os.Getenv("AI_CHAT_MODEL"))
+	if aiChatModel == "" {
+		aiChatModel = aiCompletionModel
+	}
+	if aiBaseURL == "" && (aiAPIKey != "" || aiDriver != "") {
+		aiBaseURL = "https://api.openai.com/v1"
+	}
+	if aiDriver == "" && aiBaseURL != "" {
+		aiDriver = "openai-compatible"
+	}
+	result.AI = AIConfig{
+		Driver: aiDriver, BaseURL: strings.TrimRight(aiBaseURL, "/"), APIKey: aiAPIKey,
+		CompletionModel: aiCompletionModel, ChatModel: aiChatModel, RequestTimeout: aiTimeout,
 	}
 	if result.Storage.MaxUploadBytes == 0 {
 		result.Storage.MaxUploadBytes = 100 * 1024 * 1024

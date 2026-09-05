@@ -28,6 +28,7 @@ type Handler struct {
 	frontendURL    string
 	publicURL      string
 	legacyURL      string
+	aiProvider     *application.AIProvider
 	mailer         application.Mailer
 	storage        application.Storage
 	maxUpload      int64
@@ -46,10 +47,11 @@ type principal struct {
 	SessionID string
 }
 
-func NewHandler(repository *postgres.Repository, secret string, cookieTTL time.Duration, cookieSecure bool, frontendURL, publicURL, legacyURL string, mailer application.Mailer, storage application.Storage, maxUpload int64, pdfOCR config.PDFOCRConfig) *Handler {
+func NewHandler(repository *postgres.Repository, secret string, cookieTTL time.Duration, cookieSecure bool, frontendURL, publicURL, legacyURL string, mailer application.Mailer, storage application.Storage, maxUpload int64, aiConfig config.AIConfig, pdfOCR config.PDFOCRConfig) *Handler {
 	return &Handler{
 		repository: repository, tokens: newTokenService(secret),
 		licenseService: enterprise.NewLicenseService(secret),
+		aiProvider:     application.NewAIProvider(aiConfig.BaseURL, aiConfig.APIKey, aiConfig.ChatModel, aiConfig.RequestTimeout),
 		cookieTTL:      cookieTTL, cookieSecure: cookieSecure,
 		frontendURL: strings.TrimRight(frontendURL, "/"), publicURL: strings.TrimRight(publicURL, "/"), legacyURL: strings.TrimRight(legacyURL, "/"),
 		mailer: mailer, storage: storage, maxUpload: maxUpload, pdfOCR: pdfOCR,
@@ -502,6 +504,18 @@ func (handler *Handler) updateWorkspace(c *gin.Context) {
 	if request.EnforceSSO != nil && *request.EnforceSSO && !handler.requireFeature(c, "sso:custom") {
 		return
 	}
+	if request.GenerativeAI != nil && *request.GenerativeAI && !handler.requireFeature(c, "ai") {
+		return
+	}
+	if request.AISearch != nil && *request.AISearch && !handler.requireFeature(c, "ai") {
+		return
+	}
+	if request.MCPEnabled != nil && *request.MCPEnabled && !handler.requireFeature(c, "mcp") {
+		return
+	}
+	if (request.EnforceMCPOAuth != nil && *request.EnforceMCPOAuth || request.AIChatReadOnly != nil && *request.AIChatReadOnly || request.AIWorkspaceOnly != nil && *request.AIWorkspaceOnly) && !handler.requireFeature(c, "ai:controls") {
+		return
+	}
 	settings = setWorkspaceSetting(settings, request.GenerativeAI, "ai", "generative")
 	settings = setWorkspaceSetting(settings, request.AISearch, "ai", "search")
 	settings = setWorkspaceSetting(settings, request.MCPEnabled, "ai", "mcp")
@@ -914,8 +928,8 @@ func (handler *Handler) migrationStatus(c *gin.Context) {
 	legacyFallbackConfigured := handler.legacyURL != ""
 	writeData(c, http.StatusOK, gin.H{
 		"runtime": "go", "nodeRequired": legacyFallbackConfigured, "legacyFallbackConfigured": legacyFallbackConfigured,
-		"implemented": []string{"auth-core", "users", "workspace-core", "spaces-core", "pages-core", "groups-core", "comments-core", "search-core", "shared-page-search", "attachment-search", "shares-core", "shared-attachments", "local-attachments", "file-task-query", "notifications-core", "sessions", "page-history", "collaboration-core", "realtime-core", "transclusion-lookup", "transclusion-attachment-copy", "mail-delivery", "database-integration-validation", "docmost-schema-adoption", "page-access-core", "page-permissions-management", "single-page-export", "archive-export", "export-attachments", "docx-export", "docx-import", "pdf-text-import", "markdown-html-import", "generic-zip-import", "zip-attachment-import", "notion-confluence-basic-import", "license", "api-keys", "audit-logs", "page-verification", "templates"},
-		"pending":     []string{"pdf-ocr-import", "notion-confluence-full-import", "docmost-schema-upgrades", "enterprise-ai", "enterprise-bases", "enterprise-billing", "enterprise-mfa", "enterprise-oauth", "enterprise-personal-space", "enterprise-scim", "enterprise-sso"},
+		"implemented": []string{"auth-core", "users", "workspace-core", "spaces-core", "pages-core", "groups-core", "comments-core", "search-core", "shared-page-search", "attachment-search", "shares-core", "shared-attachments", "local-attachments", "file-task-query", "notifications-core", "sessions", "page-history", "collaboration-core", "realtime-core", "transclusion-lookup", "transclusion-attachment-copy", "mail-delivery", "database-integration-validation", "docmost-schema-adoption", "page-access-core", "page-permissions-management", "single-page-export", "archive-export", "export-attachments", "docx-export", "docx-import", "pdf-text-import", "markdown-html-import", "generic-zip-import", "zip-attachment-import", "notion-confluence-basic-import", "license", "api-keys", "audit-logs", "page-verification", "templates", "enterprise-mfa-core", "enterprise-personal-space-core", "enterprise-scim-token-management", "enterprise-sso-provider-management", "enterprise-bases-core", "enterprise-ai-chat-persistence", "enterprise-ai-openai-compatible", "enterprise-ai-search-answer-core"},
+		"pending":     []string{"pdf-ocr-import", "notion-confluence-full-import", "docmost-schema-upgrades", "enterprise-ai-tools-and-indexing", "enterprise-bases-advanced-filters-references", "enterprise-billing", "enterprise-oauth", "enterprise-sso-login-callback"},
 	})
 }
 

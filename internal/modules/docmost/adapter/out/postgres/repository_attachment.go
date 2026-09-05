@@ -60,6 +60,20 @@ type AttachmentInput struct {
 	PageID, SpaceID                                 *string
 }
 
+// CreateAIChatAttachment stores an upload that is not tied to a page. Chat
+// attachments are claimed by the send endpoint after the chat is known.
+func (repository *Repository) CreateAIChatAttachment(ctx context.Context, input AttachmentInput, chatID *string) (domain.Attachment, error) {
+	_, err := repository.db.Exec(ctx, `INSERT INTO attachments
+(id, file_name, file_path, file_size, file_ext, mime_type, type, creator_id, workspace_id, ai_chat_id)
+VALUES ($1, $2, $3, $4, $5, $6, 'chat', $7, $8, $9)`, input.ID, input.FileName,
+		input.FilePath, input.FileSize, input.FileExt, input.MimeType,
+		input.CreatorID, input.WorkspaceID, chatID)
+	if err != nil {
+		return domain.Attachment{}, err
+	}
+	return repository.AttachmentByID(ctx, input.ID, input.WorkspaceID)
+}
+
 func (repository *Repository) AttachmentByPublicImageID(ctx context.Context, attachmentID string) (domain.Attachment, error) {
 	return scanAttachment(repository.db.QueryRow(ctx, `SELECT `+attachmentColumns+` FROM attachments a
 JOIN workspaces w ON w.id = a.workspace_id AND w.deleted_at IS NULL
