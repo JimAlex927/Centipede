@@ -123,7 +123,7 @@ func (handler *Handler) processGenericZip(c *gin.Context, data []byte, spaceID, 
 			continue
 		}
 		extension := strings.ToLower(filepath.Ext(name))
-		if extension == ".md" || extension == ".html" {
+		if isSupportedZipDocumentExtension(extension) {
 			entries = append(entries, zipImportEntry{Path: name, File: file})
 			addZipParentDirectories(directories, pathpkg.Dir(name))
 			continue
@@ -133,7 +133,7 @@ func (handler *Handler) processGenericZip(c *gin.Context, data []byte, spaceID, 
 		}
 	}
 	if len(entries) == 0 {
-		return errors.New("ZIP contains no Markdown or HTML pages")
+		return errors.New("ZIP contains no supported document pages")
 	}
 	sort.Slice(entries, func(left, right int) bool {
 		return zipPathDepth(entries[left].Path) < zipPathDepth(entries[right].Path) || (zipPathDepth(entries[left].Path) == zipPathDepth(entries[right].Path) && entries[left].Path < entries[right].Path)
@@ -161,7 +161,7 @@ func (handler *Handler) processGenericZip(c *gin.Context, data []byte, spaceID, 
 		if openErr != nil {
 			return openErr
 		}
-		nodes, parseErr := parseImportedDocument(reader, strings.ToLower(filepath.Ext(entry.Path)))
+		nodes, parseErr := parseImportedDocumentWithOCR(reader, strings.ToLower(filepath.Ext(entry.Path)), handler.pdfOCR)
 		reader.Close()
 		if parseErr != nil {
 			return parseErr
@@ -187,6 +187,15 @@ func (handler *Handler) processGenericZip(c *gin.Context, data []byte, spaceID, 
 		}
 	}
 	return nil
+}
+
+func isSupportedZipDocumentExtension(extension string) bool {
+	switch strings.ToLower(extension) {
+	case ".md", ".html", ".docx", ".pdf":
+		return true
+	default:
+		return false
+	}
 }
 
 func (handler *Handler) importZipAttachments(c *gin.Context, pageID, spaceID, pagePath, source string, nodes []importNode, assets map[string]*zip.File, current principal) error {

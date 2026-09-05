@@ -64,3 +64,14 @@ func TestZipImportSources(t *testing.T) {
 		t.Fatal("unknown source unexpectedly accepted")
 	}
 }
+
+func TestSupportedZipDocumentExtensions(t *testing.T) {
+	for _, extension := range []string{".md", ".html", ".docx", ".pdf", ".DOCX"} {
+		if !isSupportedZipDocumentExtension(extension) {
+			t.Fatalf("supported document extension rejected: %q", extension)
+		}
+	}
+	if isSupportedZipDocumentExtension(".csv") || isSupportedZipDocumentExtension(".png") {
+		t.Fatal("non-document ZIP entry unexpectedly treated as a page")
+	}
+}
