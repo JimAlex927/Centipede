@@ -771,8 +771,8 @@ func (handler *Handler) version(c *gin.Context) {
 func (handler *Handler) migrationStatus(c *gin.Context) {
 	writeData(c, http.StatusOK, gin.H{
 		"runtime": "go", "nodeRequired": true,
-		"implemented": []string{"auth-core", "users", "workspace-core", "spaces-core", "pages-core", "groups-core", "comments-core", "search-core", "shares-core", "local-attachments", "notifications-core", "sessions", "page-history"},
-		"pending":     []string{"collaboration", "realtime", "imports", "exports", "mail-delivery", "page-permissions", "shared-attachments", "docmost-schema-migrations", "database-integration-validation", "enterprise"},
+		"implemented": []string{"auth-core", "users", "workspace-core", "spaces-core", "pages-core", "groups-core", "comments-core", "search-core", "shares-core", "local-attachments", "notifications-core", "sessions", "page-history", "collaboration-core", "realtime-core", "page-access-core"},
+		"pending":     []string{"imports", "exports", "mail-delivery", "page-permissions-management", "shared-attachments", "docmost-schema-migrations", "database-integration-validation", "enterprise"},
 	})
 }
 
