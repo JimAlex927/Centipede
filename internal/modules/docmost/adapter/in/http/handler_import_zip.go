@@ -498,7 +498,7 @@ func (handler *Handler) importZipAttachments(ctx context.Context, pageID, spaceI
 					attachmentID, importedOK := imported[resourcePath]
 					if !importedOK {
 						var err error
-						attachmentID, err = handler.createImportedAttachment(ctx, pageID, spaceID, resourcePath, file, current)
+						attachmentID, err = handler.createImportedAttachmentNamed(ctx, pageID, spaceID, resourcePath, file, current, confluenceAttachmentName(resource, resourcePath, source))
 						if err != nil {
 							return err
 						}
@@ -520,6 +520,10 @@ func (handler *Handler) importZipAttachments(ctx context.Context, pageID, spaceI
 }
 
 func (handler *Handler) createImportedAttachment(ctx context.Context, pageID, spaceID, resourcePath string, file *zip.File, current principal) (string, error) {
+	return handler.createImportedAttachmentNamed(ctx, pageID, spaceID, resourcePath, file, current, pathpkg.Base(resourcePath))
+}
+
+func (handler *Handler) createImportedAttachmentNamed(ctx context.Context, pageID, spaceID, resourcePath string, file *zip.File, current principal, displayName string) (string, error) {
 	if file.UncompressedSize64 > maxImportedAttachmentSize {
 		return "", errors.New("ZIP attachment is too large")
 	}
@@ -535,7 +539,10 @@ func (handler *Handler) createImportedAttachment(ctx context.Context, pageID, sp
 	if len(data) > maxImportedAttachmentSize {
 		return "", errors.New("ZIP attachment is too large")
 	}
-	return handler.createImportedAttachmentData(ctx, pageID, spaceID, pathpkg.Base(resourcePath), data, current)
+	if strings.TrimSpace(displayName) == "" {
+		displayName = pathpkg.Base(resourcePath)
+	}
+	return handler.createImportedAttachmentData(ctx, pageID, spaceID, displayName, data, current)
 }
 
 func (handler *Handler) createImportedAttachmentData(ctx context.Context, pageID, spaceID, fileName string, data []byte, current principal) (string, error) {
@@ -805,6 +812,24 @@ func resolveConfluenceAssetPath(resourcePath string, assets map[string]*zip.File
 func isConfluenceNumericAsset(path string) bool {
 	_, ok := confluenceNumericFileID(pathpkg.Base(path))
 	return ok
+}
+
+func confluenceAttachmentName(resource, resolvedPath, source string) string {
+	if source != "confluence" {
+		return pathpkg.Base(resolvedPath)
+	}
+	parsed, err := url.Parse(strings.TrimSpace(resource))
+	if err != nil || parsed.Path == "" {
+		return pathpkg.Base(resolvedPath)
+	}
+	name := pathpkg.Base(parsed.Path)
+	if name == "" || name == "." || isConfluenceNumericAsset(name) {
+		return pathpkg.Base(resolvedPath)
+	}
+	if decoded, decodeErr := url.PathUnescape(name); decodeErr == nil && decoded != "" {
+		name = decoded
+	}
+	return name
 }
 
 var (

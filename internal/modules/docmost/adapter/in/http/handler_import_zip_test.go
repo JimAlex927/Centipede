@@ -201,6 +201,18 @@ func TestResolveConfluenceAssetPathSupportsNumericAliases(t *testing.T) {
 	}
 }
 
+func TestConfluenceAttachmentNamePreservesHTMLFilename(t *testing.T) {
+	if got := confluenceAttachmentName("/download/attachments/123/45678/报告.pdf", "attachments/123/45678", "confluence"); got != "报告.pdf" {
+		t.Fatalf("unexpected aliased attachment name: %q", got)
+	}
+	if got := confluenceAttachmentName("attachments/123/45678", "attachments/123/45678", "confluence"); got != "45678" {
+		t.Fatalf("unexpected numeric attachment name: %q", got)
+	}
+	if got := confluenceAttachmentName("images/manual.pdf", "images/manual.pdf", "generic"); got != "manual.pdf" {
+		t.Fatalf("unexpected generic attachment name: %q", got)
+	}
+}
+
 func TestBuildDrawioSVG(t *testing.T) {
 	value := buildDrawioSVG([]byte("<mxfile/>"), []byte("png"))
 	if !bytes.Contains(value, []byte(`content="PG14ZmlsZS8+"`)) || !bytes.Contains(value, []byte(`data:image/png;base64,cG5n`)) {
