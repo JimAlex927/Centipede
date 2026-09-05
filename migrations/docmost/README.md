@@ -38,9 +38,10 @@ An older or incomplete schema is rejected and must be upgraded separately
 before starting Go.
 
 The Go migration runner records the baseline and applies the additive
-`000002_docmost_compatibility.sql` upgrade on subsequent runs. No Node runtime is
-needed to apply either file. The compatibility upgrade is safe to rerun and is
-intended for older Docmost installations; it does not remove or rewrite data.
+`000002_docmost_compatibility.sql` and the follow-up
+`000003_docmost_late_tables.sql` upgrades on subsequent runs. No Node runtime is
+needed to apply these files. Both compatibility upgrades are safe to rerun and
+only add missing schema elements; they do not remove or rewrite data.
 The source-side `go-test-migrate.ts` script is only a development reference
 generator for comparing the upstream schema.
 
