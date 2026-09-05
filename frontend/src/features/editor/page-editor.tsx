@@ -422,7 +422,12 @@ function CollabPageEditor({
 
   useEffect(() => {
     const timeout = setTimeout(() => {
-      if (yjsConnectionStatus === WebSocketStatus.Connecting || !isSynced) {
+      // The WebSocket status is authoritative for the connection warning.
+      // Local IndexedDB and the initial Yjs state can legitimately take
+      // longer than the old 7.5s timeout; treating that as a disconnect made
+      // the UI report a lost connection while the collaboration room was
+      // still connected and syncing.
+      if (yjsConnectionStatus === WebSocketStatus.Connecting) {
         setYjsConnectionStatus(WebSocketStatus.Disconnected);
       }
     }, 7500);
