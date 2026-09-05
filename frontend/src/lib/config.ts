@@ -22,7 +22,14 @@ export function getServerAppUrl(): string {
 }
 
 export function getBackendUrl(): string {
-  return getConfigValue("API_BASE_URL", getAppUrl() + "/api").replace(/\/$/, "");
+  // API_BASE_URL is the preferred explicit setting. APP_URL is kept as the
+  // documented backend-origin fallback for a separately served frontend.
+  return getConfigValue("API_BASE_URL", `${getServerAppUrl() || getAppUrl()}/api`).replace(/\/$/, "");
+}
+
+export function getApiUrl(path: string): string {
+  const normalizedPath = path.startsWith("/api/") ? path.substring(4) : path;
+  return `${getBackendUrl()}${normalizedPath.startsWith("/") ? normalizedPath : `/${normalizedPath}`}`;
 }
 
 export function getBackendOrigin(): string {

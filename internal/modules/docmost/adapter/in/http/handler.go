@@ -74,6 +74,8 @@ func (handler *Handler) Register(router gin.IRouter) {
 	api.POST("/auth/forgot-password", handler.forgotPassword)
 	api.POST("/auth/password-reset", handler.passwordReset)
 	api.POST("/auth/verify-token", handler.verifyUserToken)
+	api.GET("/sso/oidc/:providerID/login", handler.oidcLogin)
+	api.GET("/sso/oidc/:providerID/callback", handler.oidcCallback)
 	// MFA routes intentionally live outside the regular auth middleware: the
 	// login flow uses a short-lived transfer token before the full session is
 	// issued.
@@ -250,10 +252,25 @@ func (handler *Handler) publicWorkspace(c *gin.Context) {
 		handler.writeRepositoryError(c, err, "Workspace not found")
 		return
 	}
+	providers, err := handler.repository.EnabledAuthProviders(c.Request.Context(), workspace.ID)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to load authentication providers")
+		return
+	}
+	filteredProviders := make([]postgres.PublicAuthProvider, 0, len(providers))
+	for _, provider := range providers {
+		feature := "sso:custom"
+		if provider.Type == "google" {
+			feature = "sso:google"
+		}
+		if handler.workspaceHasFeature(c.Request.Context(), workspace.ID, feature) {
+			filteredProviders = append(filteredProviders, provider)
+		}
+	}
 	writeData(c, http.StatusOK, gin.H{
 		"id": workspace.ID, "name": workspace.Name, "logo": workspace.Logo,
 		"hostname": workspace.Hostname, "enforceSso": workspace.EnforceSSO,
-		"authProviders": []any{},
+		"authProviders": filteredProviders,
 	})
 }
 

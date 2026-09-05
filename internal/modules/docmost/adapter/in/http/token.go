@@ -19,6 +19,10 @@ type tokenClaims struct {
 	Type         string `json:"type"`
 	SessionID    string `json:"sessionId,omitempty"`
 	APIKeyID     string `json:"apiKeyId,omitempty"`
+	ProviderID   string `json:"providerId,omitempty"`
+	Redirect     string `json:"redirect,omitempty"`
+	Nonce        string `json:"nonce,omitempty"`
+	CodeVerifier string `json:"codeVerifier,omitempty"`
 	IssuedAt     int64  `json:"iat"`
 	ExpiresAt    int64  `json:"exp"`
 }

@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
@@ -117,5 +118,25 @@ func (handler *Handler) requireFeature(c *gin.Context, feature string) bool {
 		}
 	}
 	writeError(c, http.StatusForbidden, "This feature requires an active license")
+	return false
+}
+
+func (handler *Handler) workspaceHasFeature(ctx context.Context, workspaceID, feature string) bool {
+	if handler.licenseService == nil {
+		return false
+	}
+	key, err := handler.repository.LicenseKey(ctx, workspaceID)
+	if err != nil || key == "" {
+		return false
+	}
+	license, err := handler.licenseService.Verify(key, workspaceID)
+	if err != nil {
+		return false
+	}
+	for _, candidate := range license.Features {
+		if candidate == feature {
+			return true
+		}
+	}
 	return false
 }

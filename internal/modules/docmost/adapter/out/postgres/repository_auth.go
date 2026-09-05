@@ -185,6 +185,90 @@ SELECT $1, id FROM groups WHERE workspace_id = $2 AND id = ANY($3::uuid[]) AND d
 	return repository.UserByID(ctx, userID, workspaceID)
 }
 
+func (repository *Repository) UserByAuthAccount(ctx context.Context, providerID, providerUserID, workspaceID string) (domain.User, error) {
+	return scanUser(repository.db.QueryRow(ctx, `
+SELECT u.id::text, u.name, u.email, u.email_verified_at, u.password, u.avatar_url, u.role,
+u.workspace_id::text, u.locale, u.timezone, COALESCE(u.settings, '{}'::jsonb),
+u.last_active_at, u.last_login_at, u.deactivated_at, u.deleted_at, u.created_at,
+u.updated_at, COALESCE(u.has_generated_password, false)
+FROM users u
+JOIN auth_accounts aa ON aa.user_id = u.id
+WHERE aa.auth_provider_id = $1 AND aa.provider_user_id = $2
+  AND aa.workspace_id = $3 AND aa.deleted_at IS NULL
+  AND u.deleted_at IS NULL`, providerID, providerUserID, workspaceID))
+}
+
+func (repository *Repository) LinkAuthAccount(ctx context.Context, userID, providerID, providerUserID, workspaceID string) error {
+	accountID, err := newUUID()
+	if err != nil {
+		return err
+	}
+	_, err = repository.db.Exec(ctx, `
+INSERT INTO auth_accounts (id, user_id, provider_user_id, auth_provider_id, workspace_id)
+VALUES ($1, $2, $3, $4, $5)`, accountID, userID, providerUserID, providerID, workspaceID)
+	return err
+}
+
+func (repository *Repository) CreateSSOUser(ctx context.Context, workspaceID, providerID, providerUserID, name, email, role string, allowSignup bool) (domain.User, error) {
+	email = strings.ToLower(strings.TrimSpace(email))
+	name = strings.TrimSpace(name)
+	if email == "" || !strings.Contains(email, "@") || providerID == "" || providerUserID == "" {
+		return domain.User{}, ErrInvalidInput
+	}
+	if role == "" || role == "owner" {
+		role = "member"
+	}
+	tx, err := repository.db.Begin(ctx)
+	if err != nil {
+		return domain.User{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var userID string
+	err = tx.QueryRow(ctx, `SELECT id::text FROM users WHERE lower(email) = lower($1) AND workspace_id = $2 AND deleted_at IS NULL FOR UPDATE`, email, workspaceID).Scan(&userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		if !allowSignup {
+			return domain.User{}, ErrNotFound
+		}
+		userID, err = newUUID()
+		if err != nil {
+			return domain.User{}, err
+		}
+		if name == "" {
+			name = email
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO users
+(id, name, email, email_verified_at, password, role, workspace_id, settings, has_generated_password)
+VALUES ($1, $2, $3, now(), NULL, $4, $5, '{"preferences":{"fullPageWidth":false,"pageEditMode":"edit","editorToolbar":true}}'::jsonb, true)`, userID, name, email, role, workspaceID)
+		if err != nil {
+			return domain.User{}, err
+		}
+	} else if err != nil {
+		return domain.User{}, err
+	}
+	accountID, err := newUUID()
+	if err != nil {
+		return domain.User{}, err
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO auth_accounts (id, user_id, provider_user_id, auth_provider_id, workspace_id)
+VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING`, accountID, userID, providerUserID, providerID, workspaceID)
+	if err != nil {
+		return domain.User{}, err
+	}
+	groupMembershipID, err := newUUID()
+	if err != nil {
+		return domain.User{}, err
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO group_users (id, user_id, group_id)
+SELECT $1, $2, id FROM groups WHERE workspace_id = $3 AND is_default = true AND deleted_at IS NULL ON CONFLICT DO NOTHING`, groupMembershipID, userID, workspaceID); err != nil {
+		return domain.User{}, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return domain.User{}, err
+	}
+	return repository.UserByID(ctx, userID, workspaceID)
+}
+
 func (repository *Repository) ChangePassword(ctx context.Context, userID, workspaceID, passwordHash, currentSessionID string) error {
 	tx, err := repository.db.Begin(ctx)
 	if err != nil {

@@ -1,4 +1,5 @@
 import api from "@/lib/api-client.ts";
+import { getApiUrl } from "@/lib/config.ts";
 import {
   AiGenerateDto,
   AiContentResponse,
@@ -21,7 +22,7 @@ export async function generateAiContentStream(
 ): Promise<AbortController> {
   const abortController = new AbortController();
   try {
-    const response = await fetch("/api/ai/generate/stream", {
+    const response = await fetch(getApiUrl("/ai/generate/stream"), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

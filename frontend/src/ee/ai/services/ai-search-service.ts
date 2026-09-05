@@ -1,4 +1,5 @@
 import api from "@/lib/api-client.ts";
+import { getApiUrl } from "@/lib/config.ts";
 import { IPageSearchParams } from "@/features/search/types/search.types.ts";
 
 export interface IAiSearchResponse {
@@ -27,7 +28,7 @@ export async function aiAnswers(
   params: IPageSearchParams,
   onChunk?: (chunk: { content?: string; sources?: any[] }) => void,
 ): Promise<IAiSearchResponse> {
-  const response = await fetch("/api/ai/answers", {
+  const response = await fetch(getApiUrl("/ai/answers"), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

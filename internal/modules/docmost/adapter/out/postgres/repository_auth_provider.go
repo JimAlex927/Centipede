@@ -38,6 +38,13 @@ type AuthProvider struct {
 	DeletedAt            *time.Time      `json:"deletedAt"`
 }
 
+type PublicAuthProvider struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Type    string `json:"type"`
+	Enabled bool   `json:"isEnabled"`
+}
+
 const authProviderColumns = `
 p.id::text, p.name, p.type, p.saml_url, p.saml_certificate,
 p.oidc_issuer, p.oidc_client_id, p.oidc_client_secret,
@@ -79,6 +86,27 @@ func (repository *Repository) AuthProviders(ctx context.Context, workspaceID str
 		items = append(items, item)
 	}
 	return page(items, len(items)), rows.Err()
+}
+
+func (repository *Repository) EnabledAuthProviders(ctx context.Context, workspaceID string) ([]PublicAuthProvider, error) {
+	rows, err := repository.db.Query(ctx, `
+SELECT p.id::text, p.name, p.type, p.is_enabled
+FROM auth_providers p
+WHERE p.workspace_id = $1 AND p.is_enabled = true AND p.deleted_at IS NULL
+ORDER BY p.name, p.id`, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]PublicAuthProvider, 0)
+	for rows.Next() {
+		var item PublicAuthProvider
+		if err := rows.Scan(&item.ID, &item.Name, &item.Type, &item.Enabled); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
 }
 
 func (repository *Repository) AuthProviderByID(ctx context.Context, id, workspaceID string) (AuthProvider, error) {

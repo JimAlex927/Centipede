@@ -1,4 +1,5 @@
 import api from "@/lib/api-client.ts";
+import { getApiUrl } from "@/lib/config.ts";
 import type {
   AiChat,
   AiChatMessage,
@@ -73,7 +74,7 @@ export function sendChatMessage(
 
   (async () => {
     try {
-      const response = await fetch("/api/ai/chats/send", {
+      const response = await fetch(getApiUrl("/ai/chats/send"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(params),
