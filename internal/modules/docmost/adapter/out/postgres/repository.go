@@ -491,11 +491,41 @@ func scanPage(row rowScanner) (domain.Page, error) {
 }
 
 func (repository *Repository) PageByID(ctx context.Context, id, slugID, workspaceID string, includeDeleted bool) (domain.Page, error) {
+	// The client normally sends pages.slug_id for a deep link. Keeping the
+	// predicates separate lets PostgreSQL use the primary-key or slug index;
+	// the previous `id::text OR slug_id` predicate could force a table scan.
+	lookup := id
+	if lookup == "" {
+		lookup = slugID
+	}
+	if !looksLikeUUID(lookup) && slugID != "" && !looksLikeUUID(slugID) {
+		lookup = slugID
+	}
+
+	predicate := "p.id = $2"
+	if !looksLikeUUID(lookup) && slugID != "" {
+		predicate = "p.slug_id = $2"
+	}
 	return scanPage(repository.db.QueryRow(ctx, `
 SELECT `+pageColumns+` FROM pages p `+pageJoins+`
 WHERE p.workspace_id = $1
-  AND (($2 <> '' AND p.id::text = $2) OR ($3 <> '' AND p.slug_id = $3))
-  AND ($4 OR p.deleted_at IS NULL)`, workspaceID, id, slugID, includeDeleted))
+  AND `+predicate+`
+  AND ($3 OR p.deleted_at IS NULL)`, workspaceID, lookup, includeDeleted))
+}
+
+func looksLikeUUID(value string) bool {
+	if len(value) != 36 || value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-' {
+		return false
+	}
+	for index, char := range value {
+		if index == 8 || index == 13 || index == 18 || index == 23 {
+			continue
+		}
+		if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f') || (char >= 'A' && char <= 'F')) {
+			return false
+		}
+	}
+	return true
 }
 
 type PageInput struct {
