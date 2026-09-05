@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 const validConfigYAML = `
@@ -47,6 +48,19 @@ func TestBuildConfigFromYAML(t *testing.T) {
 	}
 	if cfg.Migration.LegacyBaseURL != "http://localhost:3000" {
 		t.Fatalf("unexpected migration config: %#v", cfg.Migration)
+	}
+	if cfg.PDFOCR.Timeout != 2*time.Minute || cfg.PDFOCR.MaxPages != 32 || cfg.PDFOCR.Language != "eng" {
+		t.Fatalf("unexpected default PDF OCR config: %#v", cfg.PDFOCR)
+	}
+}
+
+func TestPDFOCRConfigRequiresBothCommands(t *testing.T) {
+	_, err := buildConfig([]byte(validConfigYAML+`
+pdf_ocr:
+  tesseract_path: "tesseract"
+`), "test")
+	if err == nil {
+		t.Fatal("expected PDF OCR command pair validation")
 	}
 }
 

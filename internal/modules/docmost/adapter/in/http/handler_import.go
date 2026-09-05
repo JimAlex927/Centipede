@@ -3,20 +3,26 @@ package http
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	htmlnode "golang.org/x/net/html"
 
 	"centipede/internal/modules/docmost/adapter/out/postgres"
+	"centipede/internal/platform/config"
 
 	"github.com/gin-gonic/gin"
 	"github.com/ledongthuc/pdf"
@@ -67,7 +73,7 @@ func (handler *Handler) importPage(c *gin.Context) {
 		return
 	}
 	defer opened.Close()
-	nodes, err := parseImportedDocument(opened, extension)
+	nodes, err := parseImportedDocumentWithOCR(opened, extension, handler.pdfOCR)
 	if err != nil {
 		writeError(c, http.StatusBadRequest, "Failed to parse imported file")
 		return
@@ -89,6 +95,10 @@ func (handler *Handler) importPage(c *gin.Context) {
 }
 
 func parseImportedDocument(reader io.Reader, extension string) ([]importNode, error) {
+	return parseImportedDocumentWithOCR(reader, extension, config.PDFOCRConfig{})
+}
+
+func parseImportedDocumentWithOCR(reader io.Reader, extension string, ocrConfig config.PDFOCRConfig) ([]importNode, error) {
 	if extension == ".md" {
 		return parseMarkdown(reader)
 	}
@@ -96,7 +106,7 @@ func parseImportedDocument(reader io.Reader, extension string) ([]importNode, er
 		return parseDocx(reader)
 	}
 	if extension == ".pdf" {
-		return parsePDF(reader)
+		return parsePDFWithOCR(reader, ocrConfig)
 	}
 	document, err := htmlnode.Parse(reader)
 	if err != nil {
@@ -106,6 +116,10 @@ func parseImportedDocument(reader io.Reader, extension string) ([]importNode, er
 }
 
 func parsePDF(reader io.Reader) ([]importNode, error) {
+	return parsePDFWithOCR(reader, config.PDFOCRConfig{})
+}
+
+func parsePDFWithOCR(reader io.Reader, ocrConfig config.PDFOCRConfig) ([]importNode, error) {
 	data, err := io.ReadAll(io.LimitReader(reader, singlePageImportLimit+1))
 	if err != nil {
 		return nil, err
@@ -126,27 +140,95 @@ func parsePDF(reader io.Reader) ([]importNode, error) {
 	if err = temporary.Close(); err != nil {
 		return nil, err
 	}
-	file, document, err := pdf.Open(temporaryName)
+	value, extractionErr := extractPDFText(temporaryName)
+	if value == "" {
+		if ocrConfig.TesseractPath == "" || ocrConfig.PDFToPNGPath == "" {
+			if extractionErr != nil {
+				return nil, extractionErr
+			}
+			return nil, errors.New("PDF contains no extractable text; configure pdf_ocr for scanned PDFs")
+		}
+		value, err = extractPDFTextWithOCR(temporaryName, ocrConfig)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if value == "" {
+		return nil, errors.New("PDF OCR produced no text")
+	}
+	return []importNode{{Type: "paragraph", Content: []importNode{{Type: "text", Text: value}}}}, nil
+}
+
+func extractPDFText(fileName string) (string, error) {
+	file, document, err := pdf.Open(fileName)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	defer file.Close()
 	plainText, err := document.GetPlainText()
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	text, err := io.ReadAll(io.LimitReader(plainText, singlePageImportLimit+1))
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	if len(text) > singlePageImportLimit {
-		return nil, errors.New("import file is too large")
+		return "", errors.New("import file is too large")
 	}
-	value := strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(string(text), "\r\n", "\n"), "\r", "\n"))
-	if value == "" {
-		return nil, errors.New("PDF contains no extractable text")
+	return strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(string(text), "\r\n", "\n"), "\r", "\n")), nil
+}
+
+func extractPDFTextWithOCR(fileName string, ocrConfig config.PDFOCRConfig) (string, error) {
+	if ocrConfig.Timeout <= 0 {
+		ocrConfig.Timeout = 2 * time.Minute
 	}
-	return []importNode{{Type: "paragraph", Content: []importNode{{Type: "text", Text: value}}}}, nil
+	if ocrConfig.MaxPages <= 0 {
+		ocrConfig.MaxPages = 32
+	}
+	workDir, err := os.MkdirTemp("", "docmost-pdf-ocr-")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(workDir)
+	prefix := filepath.Join(workDir, "page")
+	ctx, cancel := context.WithTimeout(context.Background(), ocrConfig.Timeout)
+	defer cancel()
+	render := exec.CommandContext(ctx, ocrConfig.PDFToPNGPath, "-png", "-r", "200", "-f", "1", "-l", strconv.Itoa(ocrConfig.MaxPages), fileName, prefix)
+	if output, err := render.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("render PDF for OCR: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	images, err := filepath.Glob(prefix + "-*.png")
+	if err != nil {
+		return "", err
+	}
+	sort.Strings(images)
+	if len(images) == 0 {
+		return "", errors.New("PDF OCR renderer produced no page images")
+	}
+	var text strings.Builder
+	for _, image := range images {
+		ocr := exec.CommandContext(ctx, ocrConfig.TesseractPath, image, "stdout", "-l", ocrConfig.Language)
+		output, err := ocr.Output()
+		if err != nil {
+			if ctx.Err() != nil {
+				return "", fmt.Errorf("OCR timed out: %w", ctx.Err())
+			}
+			return "", fmt.Errorf("run tesseract: %w", err)
+		}
+		pageText := strings.TrimSpace(string(output))
+		if pageText == "" {
+			continue
+		}
+		if text.Len() > 0 {
+			text.WriteString("\n\n")
+		}
+		text.WriteString(pageText)
+		if text.Len() > singlePageImportLimit {
+			return "", errors.New("OCR result is too large")
+		}
+	}
+	return strings.TrimSpace(text.String()), nil
 }
 
 type docxImportParagraph struct {

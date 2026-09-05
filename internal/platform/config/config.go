@@ -15,6 +15,7 @@ type Config struct {
 	Auth        AuthConfig
 	Mail        MailConfig
 	Storage     StorageConfig
+	PDFOCR      PDFOCRConfig
 	SSO         SSOConfig
 	Migration   MigrationConfig
 }
@@ -33,6 +34,17 @@ type ServerConfig struct {
 type StorageConfig struct {
 	DataDir        string
 	MaxUploadBytes int64
+}
+
+// PDFOCRConfig enables OCR for image-only PDFs without making the Go service
+// depend on a particular OCR implementation. Both commands are optional; a
+// deployment can keep text-based PDF import enabled and leave OCR disabled.
+type PDFOCRConfig struct {
+	TesseractPath string
+	PDFToPNGPath  string
+	Language      string
+	Timeout       time.Duration
+	MaxPages      int
 }
 
 type DatabaseConfig struct {
@@ -110,6 +122,13 @@ type rawConfig struct {
 		DataDir        string `yaml:"data_dir"`
 		MaxUploadBytes int64  `yaml:"max_upload_bytes"`
 	} `yaml:"storage"`
+	PDFOCR struct {
+		TesseractPath string `yaml:"tesseract_path"`
+		PDFToPNGPath  string `yaml:"pdftoppm_path"`
+		Language      string `yaml:"language"`
+		Timeout       string `yaml:"timeout"`
+		MaxPages      int    `yaml:"max_pages"`
+	} `yaml:"pdf_ocr"`
 	SSO struct {
 		IssuerURL   string   `yaml:"issuer_url"`
 		ClientID    string   `yaml:"client_id"`
@@ -196,6 +215,23 @@ func (raw rawConfig) build(environment string) (Config, error) {
 	if result.Storage.MaxUploadBytes == 0 {
 		result.Storage.MaxUploadBytes = 100 * 1024 * 1024
 	}
+	pdfOCRTimeout := 2 * time.Minute
+	if strings.TrimSpace(raw.PDFOCR.Timeout) != "" {
+		pdfOCRTimeout, err = parseDuration("pdf_ocr.timeout", raw.PDFOCR.Timeout)
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	result.PDFOCR = PDFOCRConfig{
+		TesseractPath: strings.TrimSpace(raw.PDFOCR.TesseractPath),
+		PDFToPNGPath:  strings.TrimSpace(raw.PDFOCR.PDFToPNGPath),
+		Language:      fallback(raw.PDFOCR.Language, "eng"),
+		Timeout:       pdfOCRTimeout,
+		MaxPages:      raw.PDFOCR.MaxPages,
+	}
+	if result.PDFOCR.MaxPages == 0 {
+		result.PDFOCR.MaxPages = 32
+	}
 	if err := result.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -217,6 +253,12 @@ func (config Config) Validate() error {
 	}
 	if config.Storage.DataDir == "" || config.Storage.MaxUploadBytes <= 0 {
 		return errors.New("storage.data_dir and a positive storage.max_upload_bytes are required")
+	}
+	if (config.PDFOCR.TesseractPath == "") != (config.PDFOCR.PDFToPNGPath == "") {
+		return errors.New("pdf_ocr.tesseract_path and pdf_ocr.pdftoppm_path must be configured together")
+	}
+	if config.PDFOCR.Timeout <= 0 || config.PDFOCR.MaxPages <= 0 {
+		return errors.New("pdf_ocr.timeout and pdf_ocr.max_pages must be greater than zero")
 	}
 	if config.Server.ReadHeaderTimeout <= 0 || config.Server.ReadTimeout <= 0 || config.Server.WriteTimeout <= 0 || config.Server.IdleTimeout <= 0 || config.Server.ShutdownTimeout <= 0 {
 		return errors.New("all server timeouts must be greater than zero")

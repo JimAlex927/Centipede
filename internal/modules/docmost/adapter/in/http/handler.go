@@ -11,6 +11,7 @@ import (
 	"centipede/internal/modules/docmost/adapter/out/postgres"
 	"centipede/internal/modules/docmost/application"
 	"centipede/internal/modules/docmost/domain"
+	"centipede/internal/platform/config"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
@@ -28,6 +29,7 @@ type Handler struct {
 	mailer       application.Mailer
 	storage      application.Storage
 	maxUpload    int64
+	pdfOCR       config.PDFOCRConfig
 	realtime     *RealtimeHandler
 }
 
@@ -41,12 +43,12 @@ type principal struct {
 	SessionID string
 }
 
-func NewHandler(repository *postgres.Repository, secret string, cookieTTL time.Duration, cookieSecure bool, frontendURL, publicURL string, mailer application.Mailer, storage application.Storage, maxUpload int64) *Handler {
+func NewHandler(repository *postgres.Repository, secret string, cookieTTL time.Duration, cookieSecure bool, frontendURL, publicURL string, mailer application.Mailer, storage application.Storage, maxUpload int64, pdfOCR config.PDFOCRConfig) *Handler {
 	return &Handler{
 		repository: repository, tokens: newTokenService(secret),
 		cookieTTL: cookieTTL, cookieSecure: cookieSecure,
 		frontendURL: strings.TrimRight(frontendURL, "/"), publicURL: strings.TrimRight(publicURL, "/"),
-		mailer: mailer, storage: storage, maxUpload: maxUpload,
+		mailer: mailer, storage: storage, maxUpload: maxUpload, pdfOCR: pdfOCR,
 	}
 }
 

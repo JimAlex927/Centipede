@@ -74,6 +74,14 @@ func TestParsePDFImport(t *testing.T) {
 	}
 }
 
+func TestParseScannedPDFWithoutOCRExplainsConfiguration(t *testing.T) {
+	data := minimalTestPDF("")
+	_, err := parsePDF(strings.NewReader(data))
+	if err == nil || !strings.Contains(err.Error(), "pdf_ocr") {
+		t.Fatalf("expected OCR configuration guidance, got %v", err)
+	}
+}
+
 func minimalTestPDF(text string) string {
 	var document strings.Builder
 	document.WriteString("%PDF-1.4\n")

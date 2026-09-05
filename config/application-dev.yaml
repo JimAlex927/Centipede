@@ -33,6 +33,14 @@ storage:
   data_dir: "./data"
   max_upload_bytes: 104857600
 
+# Optional scanned-PDF OCR. Leave both command paths empty to keep OCR disabled.
+# pdf_ocr:
+#   tesseract_path: "tesseract"
+#   pdftoppm_path: "pdftoppm"
+#   language: "eng"
+#   timeout: "2m"
+#   max_pages: 32
+
 sso:
   issuer_url: "http://localhost:7777"
   client_id: "centipede.web"

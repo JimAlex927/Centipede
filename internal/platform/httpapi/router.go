@@ -48,6 +48,7 @@ func NewRouter(cfg config.Config, database *pgxpool.Pool, logger *zap.Logger) ht
 		docmostsmtp.New(cfg.Mail),
 		attachmentStorage,
 		cfg.Storage.MaxUploadBytes,
+		cfg.PDFOCR,
 	)
 	collaborationHandler := docmosthttp.NewCollaborationHandler(docmostRepository, cfg.Auth.JWTSecret, cfg.Server.CORSOrigins)
 	engine.Any("/collab/:room", gin.WrapH(collaborationHandler))
