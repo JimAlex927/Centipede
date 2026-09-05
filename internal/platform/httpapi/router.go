@@ -31,6 +31,15 @@ func NewRouter(cfg config.Config, database *pgxpool.Pool, logger *zap.Logger) ht
 	engine := gin.New()
 	_ = engine.SetTrustedProxies(nil)
 	engine.Use(gin.Recovery(), requestID(), requestLogger(logger), securityHeaders(), cors(cfg.Server.CORSOrigins))
+	engine.GET("/", func(c *gin.Context) {
+		c.String(http.StatusOK, "Hello World!")
+	})
+	engine.GET("/robots.txt", func(c *gin.Context) {
+		c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte("User-Agent: *\nDisallow: /login\nDisallow: /forgot-password\n"))
+	})
+	engine.GET("/api", func(c *gin.Context) {
+		c.String(http.StatusOK, "Hello World!")
+	})
 
 	systemhttp.Register(engine, database, cfg.Environment)
 	attachmentStorage, err := docmoststorage.NewLocal(cfg.Storage.DataDir)
