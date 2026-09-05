@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -451,6 +452,7 @@ func (handler *Handler) importZipAttachments(ctx context.Context, pageID, spaceI
 		return nil
 	}
 	imported := make(map[string]string)
+	drawioRendered := make(map[string]string)
 	var walk func([]importNode) error
 	walk = func(items []importNode) error {
 		for index := range items {
@@ -467,6 +469,28 @@ func (handler *Handler) importZipAttachments(ctx context.Context, pageID, spaceI
 				}
 				resourcePath := zipResourcePathForSource(pagePath, resource, source)
 				if file, ok := assets[resourcePath]; ok {
+					if source == "confluence" {
+						drawioPath, pngPath, isDrawio := confluenceDrawioPair(resourcePath, assets)
+						if isDrawio {
+							attachmentID, rendered := drawioRendered[drawioPath]
+							if !rendered {
+								var err error
+								attachmentID, err = handler.createImportedDrawioAttachment(ctx, pageID, spaceID, drawioPath, pngPath, assets, current)
+								if err != nil {
+									return err
+								}
+								drawioRendered[drawioPath] = attachmentID
+								if pngPath != "" {
+									drawioRendered[pngPath] = attachmentID
+								}
+							}
+							fileName := "diagram.drawio.svg"
+							node.Attrs["attachmentId"] = attachmentID
+							node.Attrs["src"] = "/api/files/" + url.PathEscape(attachmentID) + "/" + url.PathEscape(fileName)
+							node.Attrs["url"] = node.Attrs["src"]
+							continue
+						}
+					}
 					attachmentID, importedOK := imported[resourcePath]
 					if !importedOK {
 						var err error
@@ -507,11 +531,18 @@ func (handler *Handler) createImportedAttachment(ctx context.Context, pageID, sp
 	if len(data) > maxImportedAttachmentSize {
 		return "", errors.New("ZIP attachment is too large")
 	}
+	return handler.createImportedAttachmentData(ctx, pageID, spaceID, pathpkg.Base(resourcePath), data, current)
+}
+
+func (handler *Handler) createImportedAttachmentData(ctx context.Context, pageID, spaceID, fileName string, data []byte, current principal) (string, error) {
+	if len(data) > maxImportedAttachmentSize {
+		return "", errors.New("ZIP attachment is too large")
+	}
 	attachmentID, err := randomUUID()
 	if err != nil {
 		return "", err
 	}
-	fileName := safeExportFileName(pathpkg.Base(resourcePath))
+	fileName = safeExportFileName(fileName)
 	extension := filepath.Ext(fileName)
 	mimeType := mime.TypeByExtension(extension)
 	if mimeType == "" {
@@ -534,6 +565,84 @@ func (handler *Handler) createImportedAttachment(ctx context.Context, pageID, sp
 	}
 	handler.scheduleAttachmentIndex(attachment)
 	return attachmentID, nil
+}
+
+func (handler *Handler) createImportedDrawioAttachment(ctx context.Context, pageID, spaceID, drawioPath, pngPath string, assets map[string]*zip.File, current principal) (string, error) {
+	drawioFile := assets[drawioPath]
+	if drawioFile == nil {
+		return "", errors.New("Draw.io source is missing")
+	}
+	drawioData, err := readZipAsset(drawioFile)
+	if err != nil {
+		return "", err
+	}
+	var pngData []byte
+	if pngPath != "" {
+		pngFile := assets[pngPath]
+		if pngFile == nil {
+			return "", errors.New("Draw.io preview is missing")
+		}
+		pngData, err = readZipAsset(pngFile)
+		if err != nil {
+			return "", err
+		}
+	}
+	data := buildDrawioSVG(drawioData, pngData)
+	return handler.createImportedAttachmentData(ctx, pageID, spaceID, "diagram.drawio.svg", data, current)
+}
+
+func readZipAsset(file *zip.File) ([]byte, error) {
+	if file == nil || file.UncompressedSize64 > maxImportedAttachmentSize {
+		return nil, errors.New("ZIP attachment is too large")
+	}
+	opened, err := file.Open()
+	if err != nil {
+		return nil, err
+	}
+	defer opened.Close()
+	data, err := io.ReadAll(io.LimitReader(opened, maxImportedAttachmentSize+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxImportedAttachmentSize {
+		return nil, errors.New("ZIP attachment is too large")
+	}
+	return data, nil
+}
+
+func buildDrawioSVG(drawioData, pngData []byte) []byte {
+	drawioEncoded := base64.StdEncoding.EncodeToString(drawioData)
+	imageElement := ""
+	if len(pngData) > 0 {
+		imageElement = `<image href="data:image/png;base64,` + base64.StdEncoding.EncodeToString(pngData) + `" width="100%" height="100%"/>`
+	}
+	value := `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="600" height="400" viewBox="0 0 600 400" content="` + drawioEncoded + `">` + imageElement + `</svg>`
+	return []byte(value)
+}
+
+func confluenceDrawioPair(resourcePath string, assets map[string]*zip.File) (string, string, bool) {
+	extension := strings.ToLower(filepath.Ext(resourcePath))
+	if extension == ".drawio" {
+		base := strings.TrimSuffix(resourcePath, filepath.Ext(resourcePath))
+		for _, candidate := range []string{base + ".png", base + ".drawio.png"} {
+			if assets[candidate] != nil {
+				return resourcePath, candidate, true
+			}
+		}
+		return resourcePath, "", true
+	}
+	if extension == ".png" {
+		base := strings.TrimSuffix(resourcePath, filepath.Ext(resourcePath))
+		if strings.HasSuffix(strings.ToLower(base), ".drawio") {
+			base = base[:len(base)-len(".drawio")]
+		}
+		candidate := base + ".drawio"
+		if assets[candidate] != nil {
+			return candidate, resourcePath, true
+		}
+	}
+	return "", "", false
 }
 
 func zipResourcePath(pagePath, resource string) string {

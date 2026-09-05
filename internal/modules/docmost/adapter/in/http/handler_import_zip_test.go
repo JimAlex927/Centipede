@@ -1,6 +1,8 @@
 package http
 
 import (
+	"archive/zip"
+	"bytes"
 	"strings"
 	"testing"
 )
@@ -126,6 +128,30 @@ func TestSupportedZipDocumentExtensions(t *testing.T) {
 	}
 	if isSupportedZipDocumentExtension(".png") {
 		t.Fatal("non-document ZIP entry unexpectedly treated as a page")
+	}
+}
+
+func TestConfluenceDrawioPair(t *testing.T) {
+	assets := map[string]*zip.File{
+		"attachments/diagram.drawio": {},
+		"attachments/diagram.png":    {},
+	}
+	drawio, png, ok := confluenceDrawioPair("attachments/diagram.png", assets)
+	if !ok || drawio != "attachments/diagram.drawio" || png != "attachments/diagram.png" {
+		t.Fatalf("unexpected Draw.io pair: %q, %q, %v", drawio, png, ok)
+	}
+	if drawio, png, ok = confluenceDrawioPair("attachments/diagram.drawio", assets); !ok || drawio != "attachments/diagram.drawio" || png != "attachments/diagram.png" {
+		t.Fatalf("unexpected reverse Draw.io pair: %q, %q, %v", drawio, png, ok)
+	}
+	if _, _, ok = confluenceDrawioPair("attachments/other.png", assets); ok {
+		t.Fatal("unrelated PNG was treated as a Draw.io pair")
+	}
+}
+
+func TestBuildDrawioSVG(t *testing.T) {
+	value := buildDrawioSVG([]byte("<mxfile/>"), []byte("png"))
+	if !bytes.Contains(value, []byte(`content="PG14ZmlsZS8+"`)) || !bytes.Contains(value, []byte(`data:image/png;base64,cG5n`)) {
+		t.Fatalf("Draw.io SVG does not contain embedded data: %s", value)
 	}
 }
 
