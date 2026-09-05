@@ -72,6 +72,16 @@ func (handler *Handler) Register(router gin.IRouter) {
 	api.POST("/auth/forgot-password", handler.forgotPassword)
 	api.POST("/auth/password-reset", handler.passwordReset)
 	api.POST("/auth/verify-token", handler.verifyUserToken)
+	// MFA routes intentionally live outside the regular auth middleware: the
+	// login flow uses a short-lived transfer token before the full session is
+	// issued.
+	api.POST("/mfa/status", handler.mfaStatus)
+	api.POST("/mfa/setup", handler.setupMFA)
+	api.POST("/mfa/enable", handler.enableMFA)
+	api.POST("/mfa/disable", handler.disableMFA)
+	api.POST("/mfa/generate-backup-codes", handler.generateMFABackupCodes)
+	api.POST("/mfa/verify", handler.verifyMFA)
+	api.POST("/mfa/validate-access", handler.validateMFAAccess)
 	api.POST("/workspace/invites/info", handler.invitationInfo)
 	api.POST("/workspace/invites/accept", handler.acceptInvitation)
 	api.POST("/shares/info", handler.shareInfo)
@@ -335,6 +345,25 @@ func (handler *Handler) login(c *gin.Context) {
 		writeError(c, http.StatusInternalServerError, "Failed to update login")
 		return
 	}
+	mfaRecord, mfaErr := handler.repository.MFAByUser(c.Request.Context(), user.ID, workspace.ID)
+	if mfaErr != nil && !errors.Is(mfaErr, postgres.ErrNotFound) {
+		writeError(c, http.StatusInternalServerError, "Failed to load MFA settings")
+		return
+	}
+	if (mfaErr == nil && mfaRecord.IsEnabled) || (workspace.EnforceMFA && (mfaErr != nil || !mfaRecord.IsEnabled)) {
+		challengeToken, challengeErr := handler.issueMFAChallenge(c, user)
+		if challengeErr != nil {
+			writeError(c, http.StatusInternalServerError, "Failed to create MFA challenge")
+			return
+		}
+		writeData(c, http.StatusOK, gin.H{
+			"userHasMfa":       mfaErr == nil && mfaRecord.IsEnabled,
+			"requiresMfaSetup": workspace.EnforceMFA && (mfaErr != nil || !mfaRecord.IsEnabled),
+			"isMfaEnforced":    workspace.EnforceMFA,
+			"mfaToken":         challengeToken,
+		})
+		return
+	}
 	if err := handler.startSession(c, user); err != nil {
 		writeError(c, http.StatusInternalServerError, "Failed to create login session")
 		return
@@ -439,13 +468,17 @@ func (handler *Handler) updateWorkspace(c *gin.Context) {
 		Logo        *string         `json:"logo"`
 		Hostname    *string         `json:"hostname"`
 		Settings    json.RawMessage `json:"settings"`
+		EnforceMFA  *bool           `json:"enforceMfa"`
 	}
 	if !decode(c, &request) {
 		return
 	}
+	if request.EnforceMFA != nil && *request.EnforceMFA && !handler.requireFeature(c, "mfa") {
+		return
+	}
 	workspace, err := handler.repository.UpdateWorkspace(c.Request.Context(), current.Workspace.ID, postgres.WorkspaceUpdate{
 		Name: request.Name, Description: request.Description, Logo: request.Logo,
-		Hostname: request.Hostname, Settings: request.Settings,
+		Hostname: request.Hostname, Settings: request.Settings, EnforceMFA: request.EnforceMFA,
 	})
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, "Failed to update workspace")

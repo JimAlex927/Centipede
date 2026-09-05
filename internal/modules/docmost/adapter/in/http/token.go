@@ -70,7 +70,7 @@ func (service *tokenService) parse(raw, expectedType string) (tokenClaims, error
 	if claims.WorkspaceID == "" || claims.Type != expectedType || claims.ExpiresAt <= now || claims.IssuedAt > now+60 {
 		return tokenClaims{}, errors.New("invalid token")
 	}
-	if (claims.Type == "access" || claims.Type == "collab") && claims.Subject == "" {
+	if (claims.Type == "access" || claims.Type == "collab" || claims.Type == "mfa") && claims.Subject == "" {
 		return tokenClaims{}, errors.New("invalid token")
 	}
 	if claims.Type == "api_key" && (claims.Subject == "" || claims.APIKeyID == "") {

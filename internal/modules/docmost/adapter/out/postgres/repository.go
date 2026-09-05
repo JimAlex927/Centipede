@@ -264,6 +264,7 @@ type WorkspaceUpdate struct {
 	Logo        *string
 	Hostname    *string
 	Settings    json.RawMessage
+	EnforceMFA  *bool
 }
 
 func (repository *Repository) UpdateWorkspace(ctx context.Context, workspaceID string, input WorkspaceUpdate) (domain.Workspace, error) {
@@ -271,8 +272,8 @@ func (repository *Repository) UpdateWorkspace(ctx context.Context, workspaceID s
 UPDATE workspaces SET
   name = COALESCE($2, name), description = COALESCE($3, description),
   logo = COALESCE($4, logo), hostname = COALESCE($5, hostname),
-  settings = COALESCE($6::jsonb, settings), updated_at = now()
-WHERE id = $1 AND deleted_at IS NULL`, workspaceID, input.Name, input.Description, input.Logo, input.Hostname, nullableJSON(input.Settings))
+  settings = COALESCE($6::jsonb, settings), enforce_mfa = COALESCE($7, enforce_mfa), updated_at = now()
+WHERE id = $1 AND deleted_at IS NULL`, workspaceID, input.Name, input.Description, input.Logo, input.Hostname, nullableJSON(input.Settings), input.EnforceMFA)
 	if err != nil {
 		return domain.Workspace{}, err
 	}
