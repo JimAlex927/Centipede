@@ -800,11 +800,7 @@ func withPagePermissions(page domain.Page) gin.H {
 
 func (handler *Handler) requirePageAccess(c *gin.Context, page domain.Page, edit bool) bool {
 	current := currentPrincipal(c)
-	minimum := "reader"
-	if edit {
-		minimum = "writer"
-	}
-	if !handler.requireSpaceRole(c, page.SpaceID, minimum) {
+	if !handler.requireSpaceRole(c, page.SpaceID, "reader") {
 		return false
 	}
 	access, err := handler.repository.PageAccess(c.Request.Context(), page.ID, current.Workspace.ID, current.User.ID)
@@ -816,6 +812,9 @@ func (handler *Handler) requirePageAccess(c *gin.Context, page domain.Page, edit
 		writeError(c, http.StatusForbidden, "Forbidden")
 		return false
 	}
+	if edit && !access.HasRestriction {
+		return handler.requireSpaceRole(c, page.SpaceID, "writer")
+	}
 	return true
 }
 
@@ -826,6 +825,9 @@ func (handler *Handler) pagePermissions(ctx context.Context, page domain.Page, c
 	}
 	canEdit := access.CanEdit
 	if !access.HasRestriction {
+		if isAdmin(current.User) {
+			return gin.H{"canEdit": true, "hasRestriction": false}, nil
+		}
 		role, roleErr := handler.repository.SpaceRole(ctx, page.SpaceID, current.Workspace.ID, current.User.ID)
 		if roleErr != nil {
 			return nil, roleErr

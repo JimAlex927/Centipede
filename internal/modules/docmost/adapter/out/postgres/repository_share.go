@@ -100,17 +100,19 @@ type PageAccessResult struct {
 // the nearest restricted ancestor determines the effective writer role.
 func (repository *Repository) PageAccess(ctx context.Context, pageID, workspaceID, userID string) (PageAccessResult, error) {
 	var result PageAccessResult
+	var exists bool
 	err := repository.db.QueryRow(ctx, `
 WITH RECURSIVE ancestors AS (
-  SELECT id, parent_page_id, 0 AS depth
+  SELECT id, parent_page_id, 0 AS depth, ARRAY[id] AS visited
   FROM pages
   WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL
   UNION ALL
-  SELECT p.id, p.parent_page_id, a.depth + 1
+  SELECT p.id, p.parent_page_id, a.depth + 1, a.visited || p.id
   FROM pages p JOIN ancestors a ON a.parent_page_id = p.id
-  WHERE p.workspace_id = $2 AND p.deleted_at IS NULL
+  WHERE p.workspace_id = $2 AND NOT p.id = ANY(a.visited)
 )
 SELECT
+  EXISTS(SELECT 1 FROM ancestors),
   COUNT(pa.id) > 0,
   COALESCE(bool_and(pp.id IS NOT NULL) FILTER (WHERE pa.id IS NOT NULL), true),
   COALESCE((array_agg(pp.role ORDER BY a.depth ASC, pp.role DESC NULLS LAST)
@@ -120,14 +122,18 @@ LEFT JOIN page_access pa ON pa.page_id = a.id
 LEFT JOIN page_permissions pp ON pp.page_access_id = pa.id
   AND (pp.user_id = $3 OR pp.group_id IN (
     SELECT gu.group_id FROM group_users gu WHERE gu.user_id = $3
-  ))`, pageID, workspaceID, userID).Scan(&result.HasRestriction, &result.CanAccess, &result.CanEdit)
+  ))`, pageID, workspaceID, userID).Scan(&exists, &result.HasRestriction, &result.CanAccess, &result.CanEdit)
 	if err != nil {
 		return PageAccessResult{}, err
+	}
+	if !exists {
+		return PageAccessResult{}, ErrNotFound
 	}
 	if !result.HasRestriction {
 		result.CanAccess = true
 		result.CanEdit = true
 	}
+	result.CanEdit = result.CanAccess && result.CanEdit
 	return result, nil
 }
 

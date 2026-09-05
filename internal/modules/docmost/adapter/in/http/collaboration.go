@@ -92,10 +92,11 @@ func collaborationReadOnly(ctx context.Context, repository *postgres.Repository,
 		return false, err
 	}
 	if deleted {
-		return true, nil
+		return false, errors.New("page is deleted")
 	}
 	role, err := repository.SpaceRole(ctx, spaceID, workspaceID, userID)
-	if err != nil {
+	admin := userRole == "owner" || userRole == "admin"
+	if err != nil && !(admin && errors.Is(err, postgres.ErrNotFound)) {
 		return false, err
 	}
 	access, err := repository.PageAccess(ctx, pageID, workspaceID, userID)
@@ -105,13 +106,10 @@ func collaborationReadOnly(ctx context.Context, repository *postgres.Repository,
 	if access.HasRestriction && !access.CanAccess {
 		return false, errors.New("page access denied")
 	}
-	if userRole == "owner" || userRole == "admin" {
-		return false, nil
+	if access.HasRestriction {
+		return !access.CanEdit, nil
 	}
-	if role == "reader" {
-		return true, nil
-	}
-	return access.HasRestriction && !access.CanEdit, nil
+	return !admin && role != "writer" && role != "admin", nil
 }
 
 func pointerValue(value *string) string {
