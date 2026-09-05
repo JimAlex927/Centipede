@@ -590,7 +590,7 @@ func (handler *Handler) updatePage(c *gin.Context) {
 		handler.writeRepositoryError(c, err, "Page not found")
 		return
 	}
-	if !handler.requirePageAccess(c, existing, true) {
+	if !handler.requireSpaceRole(c, existing.SpaceID, "writer") {
 		return
 	}
 	page, err := handler.repository.UpdatePage(c.Request.Context(), request.PageID, current.Workspace.ID, current.User.ID, request.input())
@@ -617,6 +617,9 @@ func (handler *Handler) deletePage(c *gin.Context) {
 		requiredRole = "admin"
 	}
 	if !handler.requireSpaceRole(c, existing.SpaceID, requiredRole) {
+		return
+	}
+	if existing.DeletedAt == nil && !handler.requirePageAccess(c, existing, true) {
 		return
 	}
 	if err := handler.repository.DeletePage(c.Request.Context(), request.PageID, current.Workspace.ID, current.User.ID, request.Permanently); err != nil {
@@ -659,7 +662,7 @@ func (handler *Handler) movePage(c *gin.Context) {
 		handler.writeRepositoryError(c, err, "Page not found")
 		return
 	}
-	if !handler.requireSpaceRole(c, existing.SpaceID, "writer") {
+	if !handler.requirePageAccess(c, existing, true) {
 		return
 	}
 	if err := handler.repository.MovePage(c.Request.Context(), request.PageID, current.Workspace.ID, request.ParentPageID, request.Position); err != nil {
@@ -680,7 +683,7 @@ func (handler *Handler) movePageToSpace(c *gin.Context) {
 		handler.writeRepositoryError(c, err, "Page not found")
 		return
 	}
-	if !handler.requireSpaceRole(c, existing.SpaceID, "writer") || !handler.requireSpaceRole(c, *request.SpaceID, "writer") {
+	if !handler.requirePageAccess(c, existing, true) || !handler.requireSpaceRole(c, *request.SpaceID, "writer") {
 		return
 	}
 	if err := handler.repository.MovePageToSpace(c.Request.Context(), request.PageID, current.Workspace.ID, *request.SpaceID); err != nil {

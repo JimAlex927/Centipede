@@ -28,7 +28,7 @@ func (handler *Handler) duplicatePage(c *gin.Context) {
 		handler.writeRepositoryError(c, err, "Page not found")
 		return
 	}
-	if !handler.requireSpaceRole(c, source.SpaceID, "writer") {
+	if !handler.requirePageAccess(c, source, true) {
 		return
 	}
 	if request.SpaceID != "" && request.SpaceID != source.SpaceID && !handler.requireSpaceRole(c, request.SpaceID, "writer") {

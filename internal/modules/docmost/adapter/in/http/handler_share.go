@@ -42,7 +42,7 @@ func (handler *Handler) createShare(c *gin.Context) {
 		handler.writeRepositoryError(c, err, "Page not found")
 		return
 	}
-	if !handler.requireSpaceRole(c, page.SpaceID, "writer") {
+	if !handler.requirePageAccess(c, page, true) {
 		return
 	}
 	restricted, err := handler.repository.PageHasRestrictedAncestor(c.Request.Context(), page.ID, current.Workspace.ID)
@@ -119,7 +119,7 @@ func (handler *Handler) shareForPage(c *gin.Context) {
 		handler.writeRepositoryError(c, err, "Page not found")
 		return
 	}
-	if !handler.requireSpaceRole(c, page.SpaceID, "reader") {
+	if !handler.requirePageAccess(c, page, false) {
 		return
 	}
 	share, err := handler.repository.ShareForPage(c.Request.Context(), page.ID, current.Workspace.ID)

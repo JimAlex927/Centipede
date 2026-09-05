@@ -398,7 +398,11 @@ func (handler *Handler) comments(c *gin.Context) {
 	}
 	current := currentPrincipal(c)
 	page, err := handler.repository.PageByID(c.Request.Context(), request.PageID, "", current.Workspace.ID, false)
-	if err != nil || !handler.requireSpaceRole(c, page.SpaceID, "reader") {
+	if err != nil {
+		handler.writeRepositoryError(c, err, "Page not found")
+		return
+	}
+	if !handler.requirePageAccess(c, page, false) {
 		return
 	}
 	result, err := handler.repository.Comments(c.Request.Context(), request.PageID, current.Workspace.ID, request.Limit)
@@ -421,7 +425,11 @@ func (handler *Handler) commentInfo(c *gin.Context) {
 		return
 	}
 	page, err := handler.repository.PageByID(c.Request.Context(), comment.PageID, "", current.Workspace.ID, false)
-	if err != nil || !handler.requireSpaceRole(c, page.SpaceID, "reader") {
+	if err != nil {
+		handler.writeRepositoryError(c, err, "Page not found")
+		return
+	}
+	if !handler.requirePageAccess(c, page, false) {
 		return
 	}
 	writeData(c, http.StatusOK, comment)
@@ -438,7 +446,7 @@ func (handler *Handler) createComment(c *gin.Context) {
 		handler.writeRepositoryError(c, err, "Page not found")
 		return
 	}
-	if !handler.requireSpaceRole(c, page.SpaceID, "writer") {
+	if !handler.requirePageAccess(c, page, false) || !handler.requireSpaceRole(c, page.SpaceID, "writer") {
 		return
 	}
 	comment, err := handler.repository.CreateComment(c.Request.Context(), current.Workspace.ID, current.User.ID, postgres.CommentInput{PageID: page.ID, Content: normalizeJSON(request.Content), Selection: request.Selection, Type: request.Type, ParentCommentID: request.ParentCommentID, SpaceID: page.SpaceID})
@@ -462,6 +470,19 @@ func (handler *Handler) updateComment(c *gin.Context) {
 		return
 	}
 	current := currentPrincipal(c)
+	existing, err := handler.repository.CommentByID(c.Request.Context(), request.CommentID, current.Workspace.ID)
+	if err != nil {
+		handler.writeRepositoryError(c, err, "Comment not found")
+		return
+	}
+	page, err := handler.repository.PageByID(c.Request.Context(), existing.PageID, "", current.Workspace.ID, false)
+	if err != nil {
+		handler.writeRepositoryError(c, err, "Page not found")
+		return
+	}
+	if !handler.requirePageAccess(c, page, false) {
+		return
+	}
 	comment, err := handler.repository.UpdateComment(c.Request.Context(), request.CommentID, current.Workspace.ID, current.User.ID, normalizeJSON(request.Content))
 	if err != nil {
 		handler.writeRepositoryError(c, err, "Comment not found")
@@ -491,7 +512,11 @@ func (handler *Handler) resolveComment(c *gin.Context) {
 		return
 	}
 	page, err := handler.repository.PageByID(c.Request.Context(), comment.PageID, "", current.Workspace.ID, false)
-	if err != nil || !handler.requireSpaceRole(c, page.SpaceID, "writer") {
+	if err != nil {
+		handler.writeRepositoryError(c, err, "Page not found")
+		return
+	}
+	if !handler.requirePageAccess(c, page, true) {
 		return
 	}
 	comment, err = handler.repository.ResolveComment(c.Request.Context(), request.CommentID, current.Workspace.ID, current.User.ID, request.Resolved)
@@ -518,9 +543,19 @@ func (handler *Handler) deleteComment(c *gin.Context) {
 	comment, commentErr := handler.repository.CommentByID(c.Request.Context(), request.CommentID, current.Workspace.ID)
 	var spaceID string
 	if commentErr == nil {
-		if page, pageErr := handler.repository.PageByID(c.Request.Context(), comment.PageID, "", current.Workspace.ID, false); pageErr == nil {
+		page, pageErr := handler.repository.PageByID(c.Request.Context(), comment.PageID, "", current.Workspace.ID, false)
+		if pageErr == nil {
 			spaceID = page.SpaceID
+			if !handler.requirePageAccess(c, page, false) {
+				return
+			}
+		} else {
+			handler.writeRepositoryError(c, pageErr, "Page not found")
+			return
 		}
+	} else {
+		handler.writeRepositoryError(c, commentErr, "Comment not found")
+		return
 	}
 	if err := handler.repository.DeleteComment(c.Request.Context(), request.CommentID, current.Workspace.ID, current.User.ID, isAdmin(current.User)); err != nil {
 		handler.writeRepositoryError(c, err, "Comment not found")
@@ -717,7 +752,11 @@ func (handler *Handler) setPageWatch(c *gin.Context, watching bool) {
 	}
 	current := currentPrincipal(c)
 	page, err := handler.repository.PageByID(c.Request.Context(), request.PageID, "", current.Workspace.ID, false)
-	if err != nil || !handler.requireSpaceRole(c, page.SpaceID, "reader") {
+	if err != nil {
+		handler.writeRepositoryError(c, err, "Page not found")
+		return
+	}
+	if !handler.requirePageAccess(c, page, false) {
 		return
 	}
 	if err := handler.repository.SetWatcher(c.Request.Context(), current.Workspace.ID, current.User.ID, page.SpaceID, &page.ID, watching); err != nil {
@@ -737,7 +776,11 @@ func (handler *Handler) pageWatchStatus(c *gin.Context) {
 	}
 	current := currentPrincipal(c)
 	page, err := handler.repository.PageByID(c.Request.Context(), request.PageID, "", current.Workspace.ID, false)
-	if err != nil || !handler.requireSpaceRole(c, page.SpaceID, "reader") {
+	if err != nil {
+		handler.writeRepositoryError(c, err, "Page not found")
+		return
+	}
+	if !handler.requirePageAccess(c, page, false) {
 		return
 	}
 	watching, err := handler.repository.WatchStatus(c.Request.Context(), current.Workspace.ID, current.User.ID, page.SpaceID, &page.ID)
