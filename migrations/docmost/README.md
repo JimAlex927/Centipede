@@ -41,5 +41,6 @@ The Go migration runner records the baseline and skips it on subsequent runs.
 No Node runtime is needed to apply it. The source-side `go-test-migrate.ts` script
 is only a development reference generator for comparing the upstream schema.
 
-This does not imply feature parity: collaboration, realtime delivery, import/export,
-mail workflows and full page-level permissions still require migration work.
+This does not imply complete enterprise feature parity: OCR for scanned PDFs,
+full Notion/Confluence semantics, and enterprise-only modules still require
+separate migration work.
