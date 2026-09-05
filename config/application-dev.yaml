@@ -1,7 +1,18 @@
 server:
   address: ":7788"
   public_url: "http://localhost:7788"
-  cors_origins: ["http://localhost:5173", "http://localhost:8080"]
+  # Keep the local Vite dev/preview ports and the VM address used for browser testing.
+  # Credentialed requests require explicit origins; do not replace this with '*'.
+  cors_origins:
+    - "http://localhost:5173"
+    - "http://localhost:4173"
+    - "http://localhost:8080"
+    - "http://localhost:3000"
+    - "http://127.0.0.1:5173"
+    - "http://127.0.0.1:4173"
+    - "http://192.168.154.128:5173"
+    - "http://192.168.154.128:4173"
+    - "http://192.168.154.128:3000"
   read_header_timeout: "5s"
   read_timeout: "20s"
   write_timeout: "20s"
