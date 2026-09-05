@@ -72,6 +72,12 @@ func (handler *Handler) createAPIKey(c *gin.Context) {
 		writeError(c, http.StatusInternalServerError, "Failed to create API key")
 		return
 	}
+	actorID := current.User.ID
+	resourceID := key.ID
+	_ = handler.repository.RecordAudit(c.Request.Context(), postgres.AuditInput{
+		WorkspaceID: current.Workspace.ID, ActorID: &actorID, Event: "api_key.created",
+		ResourceType: "api_key", ResourceID: &resourceID,
+	})
 	ttl := 10 * 365 * 24 * time.Hour
 	if expiresAt != nil {
 		ttl = time.Until(*expiresAt)
@@ -104,6 +110,12 @@ func (handler *Handler) updateAPIKey(c *gin.Context) {
 		handler.writeRepositoryError(c, err, "API key not found")
 		return
 	}
+	actorID := current.User.ID
+	resourceID := key.ID
+	_ = handler.repository.RecordAudit(c.Request.Context(), postgres.AuditInput{
+		WorkspaceID: current.Workspace.ID, ActorID: &actorID, Event: "api_key.updated",
+		ResourceType: "api_key", ResourceID: &resourceID,
+	})
 	writeData(c, http.StatusOK, key)
 }
 
@@ -120,6 +132,12 @@ func (handler *Handler) revokeAPIKey(c *gin.Context) {
 		handler.writeRepositoryError(c, err, "API key not found")
 		return
 	}
+	actorID := current.User.ID
+	resourceID := request.APIKeyID
+	_ = handler.repository.RecordAudit(c.Request.Context(), postgres.AuditInput{
+		WorkspaceID: current.Workspace.ID, ActorID: &actorID, Event: "api_key.deleted",
+		ResourceType: "api_key", ResourceID: &resourceID,
+	})
 	writeData(c, http.StatusOK, nil)
 }
 

@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 
+	"centipede/internal/modules/docmost/adapter/out/postgres"
 	"github.com/gin-gonic/gin"
 )
 
@@ -61,6 +62,12 @@ func (handler *Handler) activateLicense(c *gin.Context) {
 		handler.writeRepositoryError(c, err, "Workspace not found")
 		return
 	}
+	actorID := current.User.ID
+	resourceID := license.ID
+	_ = handler.repository.RecordAudit(c.Request.Context(), postgres.AuditInput{
+		WorkspaceID: current.Workspace.ID, ActorID: &actorID, Event: "license.activated",
+		ResourceType: "license", ResourceID: &resourceID,
+	})
 	writeData(c, http.StatusOK, license)
 }
 
@@ -74,6 +81,11 @@ func (handler *Handler) removeLicense(c *gin.Context) {
 		handler.writeRepositoryError(c, err, "Workspace not found")
 		return
 	}
+	actorID := current.User.ID
+	_ = handler.repository.RecordAudit(c.Request.Context(), postgres.AuditInput{
+		WorkspaceID: current.Workspace.ID, ActorID: &actorID, Event: "license.removed",
+		ResourceType: "license",
+	})
 	writeData(c, http.StatusOK, nil)
 }
 
