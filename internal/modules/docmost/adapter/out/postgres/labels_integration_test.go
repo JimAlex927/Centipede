@@ -39,4 +39,11 @@ func TestLabelQueriesMigratedSchema(t *testing.T) {
 	if len(result.Items) != 0 || result.Meta.HasNextPage {
 		t.Fatal("unexpected label results")
 	}
+	labels, err := repo.Labels(ctx, workspace, workspace, true, "page", "probe", "", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(labels.Items) != 0 || labels.Meta.HasNextPage {
+		t.Fatal("unexpected workspace labels")
+	}
 }

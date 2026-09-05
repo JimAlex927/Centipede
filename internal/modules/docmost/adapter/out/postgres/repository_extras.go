@@ -244,8 +244,18 @@ func (repository *Repository) DeleteComment(ctx context.Context, id, workspaceID
 	return err
 }
 
-func (repository *Repository) Labels(ctx context.Context, workspaceID string, limit int) (domain.Pagination[domain.Label], error) {
-	rows, err := repository.db.Query(ctx, `SELECT id::text, name, type, workspace_id::text, created_at, updated_at FROM labels WHERE workspace_id = $1 ORDER BY name LIMIT $2`, workspaceID, normalizeLimit(limit))
+func (repository *Repository) Labels(ctx context.Context, workspaceID, viewerID string, viewerAdmin bool, labelType, query, cursor string, limit int) (domain.Pagination[domain.Label], error) {
+	limit = normalizeLimit(limit)
+	if labelType == "" {
+		labelType = "page"
+	}
+	rows, err := repository.db.Query(ctx, `SELECT l.id::text, l.name, l.type, l.workspace_id::text, l.created_at, l.updated_at
+FROM labels l WHERE l.workspace_id = $1 AND l.type=$2
+AND ($3='' OR l.name ILIKE '%' || $3 || '%') AND ($4='' OR l.id::text>$4)
+AND EXISTS (SELECT 1 FROM page_labels pl JOIN pages p ON p.id=pl.page_id
+ WHERE pl.label_id=l.id AND p.workspace_id=l.workspace_id AND p.deleted_at IS NULL AND `+
+		strings.NewReplacer("$8", "$5", "$9", "$6").Replace(pageListAccessSQL)+`)
+ORDER BY l.id LIMIT $7`, workspaceID, labelType, query, cursor, viewerID, viewerAdmin, limit+1)
 	if err != nil {
 		return domain.Pagination[domain.Label]{}, err
 	}
@@ -258,7 +268,21 @@ func (repository *Repository) Labels(ctx context.Context, workspaceID string, li
 		}
 		items = append(items, item)
 	}
-	return page(items, limit), rows.Err()
+	if err := rows.Err(); err != nil {
+		return domain.Pagination[domain.Label]{}, err
+	}
+	hasNext := len(items) > limit
+	if hasNext {
+		items = items[:limit]
+	}
+	result := page(items, limit)
+	result.Meta.HasNextPage = hasNext
+	result.Meta.HasPrevPage = cursor != ""
+	if hasNext {
+		next := items[len(items)-1].ID
+		result.Meta.NextCursor = &next
+	}
+	return result, nil
 }
 
 func (repository *Repository) PageLabels(ctx context.Context, pageID, workspaceID string, limit int) (domain.Pagination[domain.Label], error) {

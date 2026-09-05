@@ -537,6 +537,9 @@ func (handler *Handler) deleteComment(c *gin.Context) {
 }
 
 type labelRequest struct {
+	Type    string   `json:"type"`
+	Query   string   `json:"query"`
+	Cursor  string   `json:"cursor"`
 	PageID  string   `json:"pageId"`
 	LabelID string   `json:"labelId"`
 	Names   []string `json:"names"`
@@ -549,7 +552,7 @@ func (handler *Handler) labels(c *gin.Context) {
 		return
 	}
 	current := currentPrincipal(c)
-	result, err := handler.repository.Labels(c.Request.Context(), current.Workspace.ID, request.Limit)
+	result, err := handler.repository.Labels(c.Request.Context(), current.Workspace.ID, current.User.ID, isAdmin(current.User), request.Type, request.Query, request.Cursor, request.Limit)
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, "Failed to load labels")
 		return
@@ -564,7 +567,11 @@ func (handler *Handler) pageLabels(c *gin.Context) {
 	}
 	current := currentPrincipal(c)
 	page, err := handler.repository.PageByID(c.Request.Context(), request.PageID, "", current.Workspace.ID, false)
-	if err != nil || !handler.requireSpaceRole(c, page.SpaceID, "reader") {
+	if err != nil {
+		handler.writeRepositoryError(c, err, "Page not found")
+		return
+	}
+	if !handler.requirePageAccess(c, page, false) {
 		return
 	}
 	result, err := handler.repository.PageLabels(c.Request.Context(), request.PageID, current.Workspace.ID, request.Limit)
@@ -582,7 +589,11 @@ func (handler *Handler) addPageLabels(c *gin.Context) {
 	}
 	current := currentPrincipal(c)
 	page, err := handler.repository.PageByID(c.Request.Context(), request.PageID, "", current.Workspace.ID, false)
-	if err != nil || !handler.requireSpaceRole(c, page.SpaceID, "writer") {
+	if err != nil {
+		handler.writeRepositoryError(c, err, "Page not found")
+		return
+	}
+	if !handler.requirePageAccess(c, page, true) {
 		return
 	}
 	labels, err := handler.repository.AddPageLabels(c.Request.Context(), request.PageID, current.Workspace.ID, request.Names)
@@ -600,7 +611,11 @@ func (handler *Handler) removePageLabel(c *gin.Context) {
 	}
 	current := currentPrincipal(c)
 	page, err := handler.repository.PageByID(c.Request.Context(), request.PageID, "", current.Workspace.ID, false)
-	if err != nil || !handler.requireSpaceRole(c, page.SpaceID, "writer") {
+	if err != nil {
+		handler.writeRepositoryError(c, err, "Page not found")
+		return
+	}
+	if !handler.requirePageAccess(c, page, true) {
 		return
 	}
 	if err := handler.repository.RemovePageLabel(c.Request.Context(), request.PageID, request.LabelID, current.Workspace.ID); err != nil {
