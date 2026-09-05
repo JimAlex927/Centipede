@@ -105,6 +105,45 @@ WHERE id = $1 AND deleted_at IS NULL`, pageID, fullState, jsonContent, textConte
 	return tx.Commit(ctx)
 }
 
+// SaveVersion implements ygo's optional VersionableAdapter. Hocuspocus used
+// to enqueue this work separately after a collaboration persistence flush;
+// keeping it in the persistence adapter gives the standalone Go server the
+// same user-visible page history without a Redis/Bull worker.
+//
+// The latest history content check makes the operation idempotent. ygo may
+// call this hook after a flush that only changed awareness or after another
+// writer has already captured the same state.
+func (store *CollaborationStore) SaveVersion(ctx context.Context, room, _ string) (int64, error) {
+	pageID, err := pageIDFromRoom(room)
+	if err != nil {
+		return 0, err
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	var inserted int64
+	err = store.db.db.QueryRow(ctx, `
+INSERT INTO page_history
+  (page_id, slug_id, title, content, icon, cover_photo, last_updated_by_id,
+   contributor_ids, space_id, workspace_id)
+SELECT p.id, p.slug_id, p.title, p.content, p.icon, p.cover_photo,
+       COALESCE(p.last_updated_by_id, p.creator_id),
+       ARRAY[COALESCE(p.last_updated_by_id, p.creator_id)], p.space_id, p.workspace_id
+FROM pages p
+WHERE p.id = $1 AND p.deleted_at IS NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM page_history h
+    WHERE h.page_id = p.id
+      AND h.content IS NOT DISTINCT FROM p.content
+  )
+RETURNING 1`, pageID).Scan(&inserted)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, nil
+	}
+	return inserted, err
+}
+
 // CollaborationPage returns the page's space and deletion state for the
 // websocket authorization hooks.
 func (repository *Repository) CollaborationPage(ctx context.Context, pageID, workspaceID string) (string, bool, error) {

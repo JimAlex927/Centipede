@@ -39,6 +39,10 @@ func (handler *CollaborationHandler) Stats() (connections, documents int64) {
 func NewCollaborationHandler(repository *postgres.Repository, secret string, allowedOrigins []string) *CollaborationHandler {
 	server := ygows.NewServerWithPersistence(repository.CollaborationStore())
 	handler := &CollaborationHandler{server: server}
+	// Docmost coalesces collaboration history roughly every five minutes for
+	// established pages. ygo invokes SaveVersion after persistence flushes and
+	// the adapter makes duplicate snapshots a no-op.
+	server.AutoVersionEvery = 5 * time.Minute
 	tokens := newTokenService(secret)
 	server.HocuspocusFraming = true
 	server.AllowedOrigins = allowedOrigins
