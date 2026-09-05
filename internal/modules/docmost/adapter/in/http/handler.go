@@ -432,6 +432,10 @@ func (handler *Handler) spaceInfo(c *gin.Context) {
 	if !decode(c, &request) {
 		return
 	}
+	if strings.TrimSpace(request.SpaceID) == "" {
+		writeError(c, http.StatusBadRequest, "Space id is required")
+		return
+	}
 	current := currentPrincipal(c)
 	space, err := handler.repository.SpaceByID(c.Request.Context(), request.SpaceID, current.Workspace.ID, current.User.ID)
 	if err != nil {

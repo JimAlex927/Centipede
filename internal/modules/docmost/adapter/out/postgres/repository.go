@@ -341,7 +341,8 @@ func (repository *Repository) SpaceByID(ctx context.Context, id, workspaceID, us
 SELECT `+spaceColumns+`
 FROM spaces s
 LEFT JOIN space_members sm ON sm.space_id = s.id AND sm.user_id = $3 AND sm.deleted_at IS NULL
-WHERE s.id = $1 AND s.workspace_id = $2 AND s.deleted_at IS NULL`, id, workspaceID, userID))
+WHERE (s.id::text = $1 OR s.slug = $1)
+  AND s.workspace_id = $2 AND s.deleted_at IS NULL`, id, workspaceID, userID))
 }
 
 func (repository *Repository) SpaceRole(ctx context.Context, spaceID, workspaceID, userID string) (string, error) {
