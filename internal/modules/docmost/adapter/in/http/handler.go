@@ -81,6 +81,9 @@ func (handler *Handler) Register(router gin.IRouter) {
 	api.POST("/auth/verify-token", handler.verifyUserToken)
 	api.GET("/sso/oidc/:providerID/login", handler.oidcLogin)
 	api.GET("/sso/oidc/:providerID/callback", handler.oidcCallback)
+	api.GET("/sso/saml/:providerID/login", handler.samlLogin)
+	api.POST("/sso/saml/:providerID/callback", handler.samlCallback)
+	api.POST("/sso/ldap/:providerID/login", handler.ldapLogin)
 	// MFA routes intentionally live outside the regular auth middleware: the
 	// login flow uses a short-lived transfer token before the full session is
 	// issued.
@@ -968,8 +971,8 @@ func (handler *Handler) migrationStatus(c *gin.Context) {
 	legacyFallbackConfigured := handler.legacyURL != ""
 	writeData(c, http.StatusOK, gin.H{
 		"runtime": "go", "nodeRequired": legacyFallbackConfigured, "legacyFallbackConfigured": legacyFallbackConfigured,
-		"implemented": []string{"auth-core", "users", "workspace-core", "spaces-core", "pages-core", "groups-core", "comments-core", "search-core", "shared-page-search", "attachment-search", "shares-core", "shared-attachments", "local-attachments", "file-task-query", "notifications-core", "sessions", "page-history", "collaboration-core", "realtime-core", "transclusion-lookup", "transclusion-attachment-copy", "mail-delivery", "database-integration-validation", "docmost-schema-adoption", "page-access-core", "page-permissions-management", "single-page-export", "archive-export", "export-attachments", "docx-export", "docx-import", "pdf-text-import", "markdown-html-import", "generic-zip-import", "zip-attachment-import", "notion-confluence-basic-import", "license", "api-keys", "audit-logs", "page-verification", "templates", "enterprise-mfa-core", "enterprise-personal-space-core", "enterprise-scim-token-management", "enterprise-sso-provider-management", "enterprise-bases-core", "enterprise-ai-chat-persistence", "enterprise-ai-openai-compatible", "enterprise-ai-search-answer-core", "enterprise-oauth"},
-		"pending":     []string{"pdf-ocr-import", "notion-confluence-full-import", "docmost-schema-upgrades", "enterprise-ai-tools-and-indexing", "enterprise-bases-advanced-filters-references", "enterprise-billing", "enterprise-sso-login-callback"},
+		"implemented": []string{"auth-core", "users", "workspace-core", "spaces-core", "pages-core", "groups-core", "comments-core", "search-core", "shared-page-search", "attachment-search", "shares-core", "shared-attachments", "local-attachments", "file-task-query", "notifications-core", "sessions", "page-history", "collaboration-core", "realtime-core", "transclusion-lookup", "transclusion-attachment-copy", "mail-delivery", "database-integration-validation", "docmost-schema-adoption", "page-access-core", "page-permissions-management", "single-page-export", "archive-export", "export-attachments", "docx-export", "docx-import", "pdf-text-import", "markdown-html-import", "generic-zip-import", "zip-attachment-import", "notion-confluence-basic-import", "license", "api-keys", "audit-logs", "page-verification", "templates", "enterprise-mfa-core", "enterprise-personal-space-core", "enterprise-scim-token-management", "enterprise-sso-provider-management", "enterprise-bases-core", "enterprise-ai-chat-persistence", "enterprise-ai-openai-compatible", "enterprise-ai-search-answer-core", "enterprise-oauth", "enterprise-sso-login-callback"},
+		"pending":     []string{"pdf-ocr-import", "notion-confluence-full-import", "docmost-schema-upgrades", "enterprise-ai-tools-and-indexing", "enterprise-bases-advanced-filters-references", "enterprise-billing", "enterprise-sso-group-sync"},
 	})
 }
 

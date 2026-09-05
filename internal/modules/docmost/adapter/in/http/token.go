@@ -11,25 +11,26 @@ import (
 )
 
 type tokenClaims struct {
-	Subject      string `json:"sub"`
-	Email        string `json:"email,omitempty"`
-	AttachmentID string `json:"attachmentId,omitempty"`
-	PageID       string `json:"pageId,omitempty"`
-	WorkspaceID  string `json:"workspaceId"`
-	Type         string `json:"type"`
-	SessionID    string `json:"sessionId,omitempty"`
-	APIKeyID     string `json:"apiKeyId,omitempty"`
-	OAuthGrantID string `json:"grantId,omitempty"`
-	OAuthScope   string `json:"scope,omitempty"`
-	Audience     string `json:"aud,omitempty"`
-	Issuer       string `json:"iss,omitempty"`
-	JTI          string `json:"jti,omitempty"`
-	ProviderID   string `json:"providerId,omitempty"`
-	Redirect     string `json:"redirect,omitempty"`
-	Nonce        string `json:"nonce,omitempty"`
-	CodeVerifier string `json:"codeVerifier,omitempty"`
-	IssuedAt     int64  `json:"iat"`
-	ExpiresAt    int64  `json:"exp"`
+	Subject       string `json:"sub"`
+	Email         string `json:"email,omitempty"`
+	AttachmentID  string `json:"attachmentId,omitempty"`
+	PageID        string `json:"pageId,omitempty"`
+	WorkspaceID   string `json:"workspaceId"`
+	Type          string `json:"type"`
+	SessionID     string `json:"sessionId,omitempty"`
+	APIKeyID      string `json:"apiKeyId,omitempty"`
+	OAuthGrantID  string `json:"grantId,omitempty"`
+	OAuthScope    string `json:"scope,omitempty"`
+	Audience      string `json:"aud,omitempty"`
+	Issuer        string `json:"iss,omitempty"`
+	JTI           string `json:"jti,omitempty"`
+	ProviderID    string `json:"providerId,omitempty"`
+	Redirect      string `json:"redirect,omitempty"`
+	Nonce         string `json:"nonce,omitempty"`
+	CodeVerifier  string `json:"codeVerifier,omitempty"`
+	SAMLRequestID string `json:"samlRequestId,omitempty"`
+	IssuedAt      int64  `json:"iat"`
+	ExpiresAt     int64  `json:"exp"`
 }
 
 type tokenService struct {
