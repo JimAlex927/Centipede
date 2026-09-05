@@ -442,6 +442,9 @@ func (handler *Handler) spaceInfo(c *gin.Context) {
 		handler.writeRepositoryError(c, err, "Space not found")
 		return
 	}
+	if space.Membership != nil {
+		space.Membership.Permissions = spacePermissions(space.Membership.Role)
+	}
 	writeData(c, http.StatusOK, space)
 }
 
@@ -790,6 +793,34 @@ func currentPrincipal(c *gin.Context) principal {
 
 func isAdmin(user domain.User) bool {
 	return user.Role != nil && (*user.Role == "owner" || *user.Role == "admin")
+}
+
+func spacePermissions(role string) []domain.Permission {
+	switch role {
+	case "admin":
+		return []domain.Permission{
+			{Action: "manage", Subject: "settings"},
+			{Action: "manage", Subject: "member"},
+			{Action: "manage", Subject: "page"},
+			{Action: "manage", Subject: "share"},
+		}
+	case "writer":
+		return []domain.Permission{
+			{Action: "read", Subject: "settings"},
+			{Action: "read", Subject: "member"},
+			{Action: "manage", Subject: "page"},
+			{Action: "manage", Subject: "share"},
+		}
+	case "reader":
+		return []domain.Permission{
+			{Action: "read", Subject: "settings"},
+			{Action: "read", Subject: "member"},
+			{Action: "read", Subject: "page"},
+			{Action: "read", Subject: "share"},
+		}
+	default:
+		return []domain.Permission{}
+	}
 }
 
 func (handler *Handler) requireSpaceRole(c *gin.Context, spaceID, minimum string) bool {

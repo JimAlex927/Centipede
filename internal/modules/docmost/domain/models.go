@@ -66,8 +66,15 @@ type Space struct {
 }
 
 type Membership struct {
-	UserID string `json:"userId"`
-	Role   string `json:"role"`
+	UserID      string       `json:"userId"`
+	Role        string       `json:"role"`
+	Permissions []Permission `json:"permissions"`
+}
+
+// Permission is the CASL rule shape consumed by the Docmost frontend.
+type Permission struct {
+	Action  string `json:"action"`
+	Subject string `json:"subject"`
 }
 
 type Page struct {

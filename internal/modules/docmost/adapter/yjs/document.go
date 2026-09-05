@@ -23,7 +23,7 @@ type Mark struct {
 }
 
 func Load(state, content []byte) (*crdt.Doc, error) {
-	doc := crdt.NewDoc()
+	doc := crdt.New()
 	if len(state) > 0 {
 		return doc, crdt.ApplyUpdateV1(doc, state, nil)
 	}
