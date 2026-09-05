@@ -47,3 +47,63 @@ func TestLabelQueriesMigratedSchema(t *testing.T) {
 		t.Fatal("unexpected workspace labels")
 	}
 }
+
+func TestLabelWritesAtomic(t *testing.T) {
+	url := os.Getenv("DOCMOST_TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("DOCMOST_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cfg, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		t.Fatal("invalid configuration")
+	}
+	cfg.MaxConns = 1
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	// Session-local fixtures leave existing application records untouched.
+	_, err = pool.Exec(ctx, `CREATE TEMP TABLE pages(id uuid PRIMARY KEY,workspace_id uuid,deleted_at timestamptz);
+ CREATE TEMP TABLE labels(id uuid PRIMARY KEY,name text,type text,workspace_id uuid,created_at timestamptz DEFAULT now(),updated_at timestamptz DEFAULT now(),UNIQUE(workspace_id,type,name));
+ CREATE TEMP TABLE page_labels(id uuid PRIMARY KEY,page_id uuid REFERENCES pages(id),label_id uuid REFERENCES labels(id),UNIQUE(page_id,label_id));
+ INSERT INTO pages VALUES ('00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002',NULL);`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := New(pool)
+	pageID := "00000000-0000-0000-0000-000000000001"
+	workspaceID := "00000000-0000-0000-0000-000000000002"
+	attached, err := repo.AddPageLabels(ctx, pageID, workspaceID, []string{"first", "first"})
+	if err != nil || len(attached) != 1 {
+		t.Fatalf("deduplication: %v, %v", attached, err)
+	}
+	attached, err = repo.AddPageLabels(ctx, pageID, workspaceID, []string{"second"})
+	if err != nil || len(attached) != 1 || attached[0].Name != "second" {
+		t.Fatalf("return newly attached only: %v, %v", attached, err)
+	}
+	if _, err = repo.AddPageLabels(ctx, pageID, workspaceID, []string{"rolled-back", " "}); err == nil {
+		t.Fatal("expected invalid input")
+	}
+	var count int
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM labels`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("transaction left labels: %d", count)
+	}
+	if _, err = repo.AddPageLabels(ctx, pageID, pageID, []string{"wrong-workspace"}); err == nil {
+		t.Fatal("expected workspace rejection")
+	}
+	if _, err = repo.AddPageLabels(ctx, pageID, workspaceID, []string{"first"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM page_labels`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("duplicate links: %d", count)
+	}
+}

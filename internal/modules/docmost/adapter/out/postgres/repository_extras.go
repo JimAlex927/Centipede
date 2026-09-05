@@ -303,25 +303,57 @@ func (repository *Repository) PageLabels(ctx context.Context, pageID, workspaceI
 }
 
 func (repository *Repository) AddPageLabels(ctx context.Context, pageID, workspaceID string, names []string) ([]domain.Label, error) {
+	tx, err := repository.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var exists bool
+	err = tx.QueryRow(ctx, `SELECT true FROM pages WHERE id=$1 AND workspace_id=$2 AND deleted_at IS NULL FOR UPDATE`, pageID, workspaceID).Scan(&exists)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	attached := make([]domain.Label, 0, len(names))
+	seen := make(map[string]bool)
 	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return nil, ErrInvalidInput
+		}
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
 		labelID, err := newUUID()
 		if err != nil {
 			return nil, err
 		}
-		linkID, _ := newUUID()
-		if _, err = repository.db.Exec(ctx, `
+		linkID, err := newUUID()
+		if err != nil {
+			return nil, err
+		}
+		var label domain.Label
+		if err = tx.QueryRow(ctx, `
 WITH label AS (
   INSERT INTO labels (id, name, type, workspace_id) VALUES ($1, $2, 'page', $3)
   ON CONFLICT (workspace_id, type, name) DO UPDATE SET updated_at = labels.updated_at
-  RETURNING id
-)
+  RETURNING *
+), linked AS (
 INSERT INTO page_labels (id, page_id, label_id)
-SELECT $4, $5, id FROM label ON CONFLICT DO NOTHING`, labelID, strings.TrimSpace(name), workspaceID, linkID, pageID); err != nil {
+SELECT $4, $5, id FROM label ON CONFLICT DO NOTHING
+)
+SELECT id::text,name,type,workspace_id::text,created_at,updated_at FROM label`, labelID, name, workspaceID, linkID, pageID).Scan(&label.ID, &label.Name, &label.Type, &label.WorkspaceID, &label.CreatedAt, &label.UpdatedAt); err != nil {
 			return nil, err
 		}
+		attached = append(attached, label)
 	}
-	result, err := repository.PageLabels(ctx, pageID, workspaceID, 100)
-	return result.Items, err
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return attached, nil
 }
 
 func (repository *Repository) RemovePageLabel(ctx context.Context, pageID, labelID, workspaceID string) error {
