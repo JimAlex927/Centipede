@@ -80,6 +80,9 @@ func (handler *Handler) removeLicense(c *gin.Context) {
 func (handler *Handler) entitlementInfo(c *gin.Context) gin.H {
 	current := currentPrincipal(c)
 	result := gin.H{"cloud": false, "tier": "free", "features": []string{}}
+	if handler.licenseService == nil {
+		return result
+	}
 	key, err := handler.repository.LicenseKey(c.Request.Context(), current.Workspace.ID)
 	if err != nil {
 		return result
@@ -91,4 +94,16 @@ func (handler *Handler) entitlementInfo(c *gin.Context) gin.H {
 	result["tier"] = license.LicenseType
 	result["features"] = license.Features
 	return result
+}
+
+func (handler *Handler) requireFeature(c *gin.Context, feature string) bool {
+	entitlements := handler.entitlementInfo(c)
+	features, _ := entitlements["features"].([]string)
+	for _, candidate := range features {
+		if candidate == feature {
+			return true
+		}
+	}
+	writeError(c, http.StatusForbidden, "This feature requires an active license")
+	return false
 }

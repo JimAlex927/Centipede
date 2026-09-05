@@ -46,6 +46,23 @@ func TestAttachmentTokenAllowsPageScopedClaims(t *testing.T) {
 	}
 }
 
+func TestAPIKeyTokenRoundTrip(t *testing.T) {
+	service := newTokenService("test-secret-not-for-production")
+	raw, err := service.issue(tokenClaims{
+		Subject: "user", WorkspaceID: "workspace", Type: "api_key", APIKeyID: "key",
+	}, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claims, err := service.parse(raw, "api_key")
+	if err != nil || claims.Subject != "user" || claims.APIKeyID != "key" {
+		t.Fatalf("api key token was not parsed: %+v, %v", claims, err)
+	}
+	if _, err := service.parse(raw, "access"); err == nil {
+		t.Fatal("api key token accepted as an access token")
+	}
+}
+
 func TestTokenRejectsInvalidClaims(t *testing.T) {
 	service := newTokenService("test-secret-not-for-production")
 	now := time.Now().Unix()

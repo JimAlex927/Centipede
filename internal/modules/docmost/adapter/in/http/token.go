@@ -18,6 +18,7 @@ type tokenClaims struct {
 	WorkspaceID  string `json:"workspaceId"`
 	Type         string `json:"type"`
 	SessionID    string `json:"sessionId,omitempty"`
+	APIKeyID     string `json:"apiKeyId,omitempty"`
 	IssuedAt     int64  `json:"iat"`
 	ExpiresAt    int64  `json:"exp"`
 }
@@ -70,6 +71,9 @@ func (service *tokenService) parse(raw, expectedType string) (tokenClaims, error
 		return tokenClaims{}, errors.New("invalid token")
 	}
 	if (claims.Type == "access" || claims.Type == "collab") && claims.Subject == "" {
+		return tokenClaims{}, errors.New("invalid token")
+	}
+	if claims.Type == "api_key" && (claims.Subject == "" || claims.APIKeyID == "") {
 		return tokenClaims{}, errors.New("invalid token")
 	}
 	// Access tokens must participate in session revocation. Other token types

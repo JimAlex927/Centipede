@@ -192,6 +192,9 @@ func (handler *Handler) authenticate() gin.HandlerFunc {
 		}
 		claims, err := handler.tokens.parse(raw, "access")
 		if err != nil {
+			claims, err = handler.tokens.parse(raw, "api_key")
+		}
+		if err != nil {
 			writeError(c, http.StatusUnauthorized, "Unauthorized")
 			c.Abort()
 			return
@@ -202,7 +205,15 @@ func (handler *Handler) authenticate() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		if claims.SessionID != "" {
+		if claims.Type == "api_key" {
+			active, keyErr := handler.repository.APIKeyActive(c.Request.Context(), claims.APIKeyID, claims.WorkspaceID, claims.Subject)
+			if keyErr != nil || !active {
+				writeError(c, http.StatusUnauthorized, "Unauthorized")
+				c.Abort()
+				return
+			}
+			_ = handler.repository.TouchAPIKey(c.Request.Context(), claims.APIKeyID, claims.WorkspaceID)
+		} else if claims.SessionID != "" {
 			active, sessionErr := handler.repository.SessionActive(c.Request.Context(), claims.SessionID, claims.Subject, claims.WorkspaceID)
 			if sessionErr != nil || !active {
 				writeError(c, http.StatusUnauthorized, "Unauthorized")

@@ -13,6 +13,10 @@ import (
 
 func (handler *Handler) registerExtraRoutes(router gin.IRouter) {
 	handler.registerPagePermissionRoutes(router)
+	router.POST("/api-keys", handler.apiKeys)
+	router.POST("/api-keys/create", handler.createAPIKey)
+	router.POST("/api-keys/update", handler.updateAPIKey)
+	router.POST("/api-keys/revoke", handler.revokeAPIKey)
 	router.POST("/groups", handler.groups)
 	router.POST("/groups/info", handler.groupInfo)
 	router.POST("/groups/create", handler.createGroup)
