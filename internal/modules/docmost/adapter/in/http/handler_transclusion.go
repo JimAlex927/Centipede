@@ -3,7 +3,9 @@ package http
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
+	"centipede/internal/modules/docmost/adapter/out/postgres"
 	"centipede/internal/modules/docmost/domain"
 
 	"github.com/gin-gonic/gin"
@@ -95,11 +97,169 @@ func (handler *Handler) unsyncTransclusionReference(c *gin.Context) {
 		writeError(c, http.StatusNotFound, "Transclusion not found")
 		return
 	}
+	rewrittenContent, copies, rewriteErr := rewriteTransclusionAttachments(content)
+	if rewriteErr != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to prepare transclusion attachments")
+		return
+	}
+	if len(copies) > 0 && handler.storage != nil {
+		oldIDs := make([]string, 0, len(copies))
+		for _, copy := range copies {
+			oldIDs = append(oldIDs, copy.OldID)
+		}
+		oldAttachments, attachmentErr := handler.repository.AttachmentsByIDs(c.Request.Context(), oldIDs, current.Workspace.ID)
+		if attachmentErr != nil {
+			writeError(c, http.StatusInternalServerError, "Failed to load transclusion attachments")
+			return
+		}
+		byID := make(map[string]domain.Attachment, len(oldAttachments))
+		for _, attachment := range oldAttachments {
+			if attachment.PageID != nil && *attachment.PageID == sourcePage.ID {
+				byID[attachment.ID] = attachment
+			}
+		}
+		for _, copy := range copies {
+			old, ok := byID[copy.OldID]
+			if !ok {
+				rewrittenContent = replaceTransclusionAttachmentID(rewrittenContent, copy.NewID, copy.OldID)
+				continue
+			}
+			file, openErr := handler.storage.Open(c.Request.Context(), old.FilePath)
+			if openErr != nil {
+				rewrittenContent = replaceTransclusionAttachmentID(rewrittenContent, copy.NewID, copy.OldID)
+				continue
+			}
+			newPath := strings.ReplaceAll(old.FilePath, copy.OldID, copy.NewID)
+			limit := handler.maxUpload
+			if limit < old.FileSize {
+				limit = old.FileSize
+			}
+			if limit <= 0 {
+				limit = maxImportedAttachmentSize
+			}
+			_, saveErr := handler.storage.Save(c.Request.Context(), newPath, file, limit)
+			_ = file.Close()
+			if saveErr != nil {
+				rewrittenContent = replaceTransclusionAttachmentID(rewrittenContent, copy.NewID, copy.OldID)
+				continue
+			}
+			pageID := referencePage.ID
+			spaceID := referencePage.SpaceID
+			if _, createErr := handler.repository.CreateAttachment(c.Request.Context(), postgres.AttachmentInput{
+				ID: copy.NewID, FileName: old.FileName, FilePath: newPath, FileSize: old.FileSize, FileExt: old.FileExt,
+				MimeType: valueOrEmpty(old.MimeType), Type: valueOrEmpty(old.Type), CreatorID: current.User.ID,
+				WorkspaceID: current.Workspace.ID, PageID: &pageID, SpaceID: &spaceID,
+			}); createErr != nil {
+				_ = handler.storage.Delete(c.Request.Context(), newPath)
+				rewrittenContent = replaceTransclusionAttachmentID(rewrittenContent, copy.NewID, copy.OldID)
+			}
+		}
+	}
 	if err := handler.repository.DeletePageTransclusionReference(c.Request.Context(), referencePage.ID, sourcePage.ID, request.TransclusionID, current.Workspace.ID); err != nil {
 		writeError(c, http.StatusInternalServerError, "Failed to unsync transclusion")
 		return
 	}
-	writeData(c, http.StatusOK, gin.H{"content": content})
+	writeData(c, http.StatusOK, gin.H{"content": rewrittenContent})
+}
+
+type transclusionAttachmentCopy struct {
+	OldID string
+	NewID string
+}
+
+func rewriteTransclusionAttachments(raw json.RawMessage) (json.RawMessage, []transclusionAttachmentCopy, error) {
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil, nil, err
+	}
+	copies := make([]transclusionAttachmentCopy, 0)
+	idMap := make(map[string]string)
+	var walk func(any) error
+	walk = func(current any) error {
+		switch node := current.(type) {
+		case []any:
+			for _, child := range node {
+				if err := walk(child); err != nil {
+					return err
+				}
+			}
+		case map[string]any:
+			if attrs, ok := node["attrs"].(map[string]any); ok {
+				if oldID, ok := attrs["attachmentId"].(string); ok && oldID != "" {
+					newID, found := idMap[oldID]
+					if !found {
+						var err error
+						newID, err = randomUUID()
+						if err != nil {
+							return err
+						}
+						idMap[oldID] = newID
+						copies = append(copies, transclusionAttachmentCopy{OldID: oldID, NewID: newID})
+					}
+					attrs["attachmentId"] = newID
+					for _, key := range []string{"src", "url"} {
+						if value, ok := attrs[key].(string); ok {
+							attrs[key] = strings.ReplaceAll(value, oldID, newID)
+						}
+					}
+				}
+			}
+			for _, child := range node {
+				if err := walk(child); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	if err := walk(value); err != nil {
+		return nil, nil, err
+	}
+	encoded, err := json.Marshal(value)
+	return encoded, copies, err
+}
+
+func replaceTransclusionAttachmentID(raw json.RawMessage, from, to string) json.RawMessage {
+	var value any
+	if json.Unmarshal(raw, &value) != nil {
+		return raw
+	}
+	var walk func(any)
+	walk = func(current any) {
+		switch node := current.(type) {
+		case []any:
+			for _, child := range node {
+				walk(child)
+			}
+		case map[string]any:
+			if attrs, ok := node["attrs"].(map[string]any); ok {
+				if attachmentID, ok := attrs["attachmentId"].(string); ok && attachmentID == from {
+					attrs["attachmentId"] = to
+				}
+				for _, key := range []string{"src", "url"} {
+					if value, ok := attrs[key].(string); ok {
+						attrs[key] = strings.ReplaceAll(value, from, to)
+					}
+				}
+			}
+			for _, child := range node {
+				walk(child)
+			}
+		}
+	}
+	walk(value)
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return raw
+	}
+	return encoded
+}
+
+func valueOrEmpty(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func transclusionPageInfo(page domain.Page) gin.H {
