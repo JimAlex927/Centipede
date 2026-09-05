@@ -137,11 +137,25 @@ VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, '')::inet, $6)`, id, userID, work
 func (repository *Repository) SessionActive(ctx context.Context, sessionID, userID, workspaceID string) (bool, error) {
 	var active bool
 	err := repository.db.QueryRow(ctx, `
+	WITH touched_session AS (
+	  UPDATE user_sessions
+  SET last_active_at = now()
+  WHERE id = $1 AND user_id = $2 AND workspace_id = $3
+    AND revoked_at IS NULL AND expires_at > now()
+    AND (last_active_at IS NULL OR last_active_at < now() - interval '15 minutes')
+  RETURNING user_id
+), touched_user AS (
+  UPDATE users u
+  SET last_active_at = now()
+  FROM touched_session s
+  WHERE u.id = s.user_id AND u.id = $2 AND u.workspace_id = $3
+  RETURNING u.id
+)
 SELECT EXISTS(
   SELECT 1 FROM user_sessions
   WHERE id = $1 AND user_id = $2 AND workspace_id = $3
     AND revoked_at IS NULL AND expires_at > now()
-)`, sessionID, userID, workspaceID).Scan(&active)
+ )`, sessionID, userID, workspaceID).Scan(&active)
 	return active, err
 }
 

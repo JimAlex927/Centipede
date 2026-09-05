@@ -155,3 +155,50 @@ VALUES ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-0000000
 		t.Fatalf("backlink sync resolved target %q", targetID)
 	}
 }
+
+func TestSessionActivityIntegration(t *testing.T) {
+	url := os.Getenv("DOCMOST_TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("DOCMOST_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cfg, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		t.Fatal("invalid test database configuration")
+	}
+	cfg.MaxConns = 1
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if _, err := pool.Exec(ctx, `
+CREATE TEMP TABLE users(id uuid, workspace_id uuid, last_active_at timestamptz);
+CREATE TEMP TABLE user_sessions(
+  id uuid, user_id uuid, workspace_id uuid, last_active_at timestamptz,
+  revoked_at timestamptz, expires_at timestamptz
+);
+INSERT INTO users VALUES
+ ('00000000-0000-0000-0000-000000000011', '00000000-0000-0000-0000-000000000002', now() - interval '1 day');
+INSERT INTO user_sessions VALUES
+ ('00000000-0000-0000-0000-000000000021', '00000000-0000-0000-0000-000000000011', '00000000-0000-0000-0000-000000000002', now() - interval '1 day', NULL, now() + interval '1 day');
+`); err != nil {
+		t.Fatal(err)
+	}
+	repository := New(pool)
+	active, err := repository.SessionActive(ctx, "00000000-0000-0000-0000-000000000021", "00000000-0000-0000-0000-000000000011", "00000000-0000-0000-0000-000000000002")
+	if err != nil || !active {
+		t.Fatalf("active session check = %v, %v", active, err)
+	}
+	var sessionActivity, userActivity time.Time
+	if err := pool.QueryRow(ctx, `SELECT last_active_at FROM user_sessions`).Scan(&sessionActivity); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT last_active_at FROM users`).Scan(&userActivity); err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(sessionActivity) > time.Minute || time.Since(userActivity) > time.Minute {
+		t.Fatalf("session activity was not refreshed: session=%v user=%v", sessionActivity, userActivity)
+	}
+}
