@@ -188,8 +188,12 @@ func (handler *Handler) pagePermissionMembers(c *gin.Context) {
 	if !ok || !handler.canManagePagePermission(c, page) {
 		return
 	}
-	items, err := handler.repository.PagePermissionMembers(c.Request.Context(), page.ID, current.Workspace.ID, request.Limit)
+	items, err := handler.repository.PagePermissionMembers(c.Request.Context(), page.ID, current.Workspace.ID, request.Cursor, request.Limit)
 	if err != nil {
+		if errors.Is(err, postgres.ErrInvalidInput) {
+			writeError(c, http.StatusBadRequest, "Invalid pagination cursor")
+			return
+		}
 		handler.writeRepositoryError(c, err, "Page restriction not found")
 		return
 	}
