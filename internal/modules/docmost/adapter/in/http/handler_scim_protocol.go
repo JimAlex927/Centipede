@@ -69,6 +69,10 @@ type scimListResponse struct {
 }
 
 func (handler *Handler) registerSCIMProtocolRoutes(router gin.IRouter) {
+	router.GET("/scim/v2/ServiceProviderConfig", handler.scimServiceProviderConfig)
+	router.GET("/scim/v2/ResourceTypes", handler.scimResourceTypes)
+	router.GET("/scim/v2/ResourceTypes/:id", handler.scimResourceType)
+	router.GET("/scim/v2/Schemas", handler.scimSchemas)
 	router.GET("/scim/v2/Users", handler.scimUsers)
 	router.POST("/scim/v2/Users", handler.scimUserCreate)
 	router.GET("/scim/v2/Users/:id", handler.scimUserInfo)
@@ -81,6 +85,63 @@ func (handler *Handler) registerSCIMProtocolRoutes(router gin.IRouter) {
 	router.PUT("/scim/v2/Groups/:id", handler.scimGroupUpdate)
 	router.PATCH("/scim/v2/Groups/:id", handler.scimGroupPatch)
 	router.DELETE("/scim/v2/Groups/:id", handler.scimGroupDelete)
+}
+
+func (handler *Handler) scimServiceProviderConfig(c *gin.Context) {
+	if _, _, ok := handler.scimContext(c); !ok {
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"schemas":        []string{"urn:ietf:params:scim:schemas:core:2.0:ServiceProviderConfig"},
+		"patch":          gin.H{"supported": true},
+		"bulk":           gin.H{"supported": false, "maxOperations": 0, "maxPayloadSize": 0},
+		"filter":         gin.H{"supported": true, "maxResults": 1000},
+		"changePassword": gin.H{"supported": false},
+		"sort":           gin.H{"supported": false},
+		"etag":           gin.H{"supported": false},
+		"authenticationSchemes": []map[string]any{{
+			"name": "OAuth Bearer Token", "description": "SCIM bearer token", "specUri": "urn:ietf:params:scim:api:messages:2.0", "type": "oauthbearertoken", "primary": true,
+		}},
+	})
+}
+
+func (handler *Handler) scimResourceTypes(c *gin.Context) {
+	if _, _, ok := handler.scimContext(c); !ok {
+		return
+	}
+	resources := []map[string]any{
+		{"schemas": []string{"urn:ietf:params:scim:schemas:core:2.0:ResourceType"}, "id": "User", "name": "User", "endpoint": "/Users", "schema": scimUserSchema, "meta": gin.H{"resourceType": "ResourceType"}},
+		{"schemas": []string{"urn:ietf:params:scim:schemas:core:2.0:ResourceType"}, "id": "Group", "name": "Group", "endpoint": "/Groups", "schema": scimGroupSchema, "meta": gin.H{"resourceType": "ResourceType"}},
+	}
+	c.JSON(http.StatusOK, scimListResponse{Schemas: []string{scimCoreSchema + ":ListResponse"}, TotalResults: len(resources), StartIndex: 1, ItemsPerPage: len(resources), Resources: resources})
+}
+
+func (handler *Handler) scimResourceType(c *gin.Context) {
+	if _, _, ok := handler.scimContext(c); !ok {
+		return
+	}
+	resourceType := strings.ToLower(strings.TrimSpace(c.Param("id")))
+	if resourceType != "user" && resourceType != "group" {
+		scimNotFound(c, "ResourceType")
+		return
+	}
+	schema := scimUserSchema
+	if resourceType == "group" {
+		schema = scimGroupSchema
+	}
+	name := strings.ToUpper(resourceType[:1]) + resourceType[1:]
+	c.JSON(http.StatusOK, gin.H{"schemas": []string{"urn:ietf:params:scim:schemas:core:2.0:ResourceType"}, "id": name, "name": name, "endpoint": "/" + name + "s", "schema": schema, "meta": gin.H{"resourceType": "ResourceType"}})
+}
+
+func (handler *Handler) scimSchemas(c *gin.Context) {
+	if _, _, ok := handler.scimContext(c); !ok {
+		return
+	}
+	resources := []map[string]any{
+		{"id": scimUserSchema, "name": "User", "description": "SCIM User", "attributes": []any{}},
+		{"id": scimGroupSchema, "name": "Group", "description": "SCIM Group", "attributes": []any{}},
+	}
+	c.JSON(http.StatusOK, scimListResponse{Schemas: []string{scimCoreSchema + ":ListResponse"}, TotalResults: len(resources), StartIndex: 1, ItemsPerPage: len(resources), Resources: resources})
 }
 
 func (handler *Handler) scimContext(c *gin.Context) (postgres.SCIMToken, domain.Workspace, bool) {
