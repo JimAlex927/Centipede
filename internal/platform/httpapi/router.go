@@ -62,6 +62,10 @@ func NewRouter(cfg config.Config, database *pgxpool.Pool, logger *zap.Logger) ht
 	)
 	collaborationHandler := docmosthttp.NewCollaborationHandler(docmostRepository, cfg.Auth.JWTSecret, cfg.Server.CORSOrigins)
 	engine.Any("/collab/:room", gin.WrapH(collaborationHandler))
+	engine.GET("/api/collab/stats", func(c *gin.Context) {
+		connections, documents := collaborationHandler.Stats()
+		c.JSON(http.StatusOK, gin.H{"connections": connections, "documents": documents})
+	})
 	realtimeHandler := docmosthttp.NewRealtimeHandler(docmostRepository, cfg.Auth.JWTSecret, cfg.Server.CORSOrigins)
 	docmostHandler.SetRealtimeHandler(realtimeHandler)
 	engine.GET("/realtime", gin.WrapH(realtimeHandler))

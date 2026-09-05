@@ -7,6 +7,7 @@ import (
 	"net/http"
 	pathpkg "path"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"centipede/internal/modules/docmost/adapter/out/postgres"
@@ -14,14 +15,39 @@ import (
 	ygows "github.com/reearth/ygo/provider/websocket"
 )
 
+// CollaborationHandler wraps ygo so the Go service can expose the same basic
+// operational counters as the upstream Docmost collaboration gateway.
+type CollaborationHandler struct {
+	server      *ygows.Server
+	connections atomic.Int64
+	documents   atomic.Int64
+}
+
+func (handler *CollaborationHandler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
+	handler.connections.Add(1)
+	defer handler.connections.Add(-1)
+	handler.server.ServeHTTP(response, request)
+}
+
+func (handler *CollaborationHandler) Stats() (connections, documents int64) {
+	return handler.connections.Load(), handler.documents.Load()
+}
+
 // NewCollaborationHandler creates the Hocuspocus-compatible Yjs websocket
 // handler used by the standalone frontend. It is intentionally separate from
 // the REST handler because ygo owns the websocket room lifecycle.
-func NewCollaborationHandler(repository *postgres.Repository, secret string, allowedOrigins []string) *ygows.Server {
+func NewCollaborationHandler(repository *postgres.Repository, secret string, allowedOrigins []string) *CollaborationHandler {
 	server := ygows.NewServerWithPersistence(repository.CollaborationStore())
+	handler := &CollaborationHandler{server: server}
 	tokens := newTokenService(secret)
 	server.HocuspocusFraming = true
 	server.AllowedOrigins = allowedOrigins
+	server.OnFirstPeer = func(context.Context, string) {
+		handler.documents.Add(1)
+	}
+	server.OnLastPeer = func(context.Context, string) {
+		handler.documents.Add(-1)
+	}
 
 	// Reject unauthenticated upgrades before ygo sends the initial document
 	// state. The browser sends the Go authToken cookie to the websocket host.
@@ -72,7 +98,7 @@ func NewCollaborationHandler(repository *postgres.Repository, secret string, all
 		}
 		return ygows.ConnectionConfig{ReadOnly: readOnly}, nil
 	}
-	return server
+	return handler
 }
 
 func roomPageID(path string) (string, error) {
