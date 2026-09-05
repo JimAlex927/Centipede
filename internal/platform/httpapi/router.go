@@ -45,6 +45,7 @@ func NewRouter(cfg config.Config, database *pgxpool.Pool, logger *zap.Logger) ht
 		cfg.Auth.CookieSecure,
 		cfg.Migration.FrontendBaseURL,
 		cfg.Server.PublicURL,
+		cfg.Migration.LegacyBaseURL,
 		docmostsmtp.New(cfg.Mail),
 		attachmentStorage,
 		cfg.Storage.MaxUploadBytes,

@@ -26,6 +26,7 @@ type Handler struct {
 	cookieSecure bool
 	frontendURL  string
 	publicURL    string
+	legacyURL    string
 	mailer       application.Mailer
 	storage      application.Storage
 	maxUpload    int64
@@ -43,11 +44,11 @@ type principal struct {
 	SessionID string
 }
 
-func NewHandler(repository *postgres.Repository, secret string, cookieTTL time.Duration, cookieSecure bool, frontendURL, publicURL string, mailer application.Mailer, storage application.Storage, maxUpload int64, pdfOCR config.PDFOCRConfig) *Handler {
+func NewHandler(repository *postgres.Repository, secret string, cookieTTL time.Duration, cookieSecure bool, frontendURL, publicURL, legacyURL string, mailer application.Mailer, storage application.Storage, maxUpload int64, pdfOCR config.PDFOCRConfig) *Handler {
 	return &Handler{
 		repository: repository, tokens: newTokenService(secret),
 		cookieTTL: cookieTTL, cookieSecure: cookieSecure,
-		frontendURL: strings.TrimRight(frontendURL, "/"), publicURL: strings.TrimRight(publicURL, "/"),
+		frontendURL: strings.TrimRight(frontendURL, "/"), publicURL: strings.TrimRight(publicURL, "/"), legacyURL: strings.TrimRight(legacyURL, "/"),
 		mailer: mailer, storage: storage, maxUpload: maxUpload, pdfOCR: pdfOCR,
 	}
 }
@@ -795,8 +796,9 @@ func (handler *Handler) version(c *gin.Context) {
 }
 
 func (handler *Handler) migrationStatus(c *gin.Context) {
+	legacyFallbackConfigured := handler.legacyURL != ""
 	writeData(c, http.StatusOK, gin.H{
-		"runtime": "go", "nodeRequired": true,
+		"runtime": "go", "nodeRequired": legacyFallbackConfigured, "legacyFallbackConfigured": legacyFallbackConfigured,
 		"implemented": []string{"auth-core", "users", "workspace-core", "spaces-core", "pages-core", "groups-core", "comments-core", "search-core", "shared-page-search", "attachment-search", "shares-core", "shared-attachments", "local-attachments", "file-task-query", "notifications-core", "sessions", "page-history", "collaboration-core", "realtime-core", "transclusion-lookup", "transclusion-attachment-copy", "mail-delivery", "database-integration-validation", "docmost-schema-adoption", "page-access-core", "single-page-export", "archive-export", "export-attachments", "docx-export", "docx-import", "pdf-text-import", "markdown-html-import", "generic-zip-import", "zip-attachment-import", "notion-confluence-basic-import"},
 		"pending":     []string{"pdf-ocr-import", "notion-confluence-full-import", "page-permissions-management", "docmost-schema-upgrades", "enterprise"},
 	})
