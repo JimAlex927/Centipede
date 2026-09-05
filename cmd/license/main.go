@@ -11,7 +11,7 @@ import (
 )
 
 func main() {
-	secret := flag.String("secret", "", "HMAC signing secret; must match auth.jwt_secret on the API")
+	secret := flag.String("secret", "dev-only-change-me-please", "HMAC signing secret; must match auth.jwt_secret on the API")
 	customer := flag.String("customer", "", "license customer name")
 	seats := flag.Int("seats", 1, "maximum active workspace members")
 	licenseType := flag.String("type", enterprise.LicenseTypeEnterprise, "license type: business or enterprise")
