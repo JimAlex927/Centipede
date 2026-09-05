@@ -463,15 +463,25 @@ func (handler *Handler) updateWorkspace(c *gin.Context) {
 		return
 	}
 	var request struct {
-		Name                *string         `json:"name"`
-		Description         *string         `json:"description"`
-		Logo                *string         `json:"logo"`
-		Hostname            *string         `json:"hostname"`
-		Settings            json.RawMessage `json:"settings"`
-		EnforceMFA          *bool           `json:"enforceMfa"`
-		AllowPersonalSpaces *bool           `json:"allowPersonalSpaces"`
-		IsSCIMEnabled       *bool           `json:"isScimEnabled"`
-		EnforceSSO          *bool           `json:"enforceSso"`
+		Name                 *string         `json:"name"`
+		Description          *string         `json:"description"`
+		Logo                 *string         `json:"logo"`
+		Hostname             *string         `json:"hostname"`
+		Settings             json.RawMessage `json:"settings"`
+		EnforceMFA           *bool           `json:"enforceMfa"`
+		AllowPersonalSpaces  *bool           `json:"allowPersonalSpaces"`
+		IsSCIMEnabled        *bool           `json:"isScimEnabled"`
+		EnforceSSO           *bool           `json:"enforceSso"`
+		GenerativeAI         *bool           `json:"generativeAi"`
+		AISearch             *bool           `json:"aiSearch"`
+		MCPEnabled           *bool           `json:"mcpEnabled"`
+		EnforceMCPOAuth      *bool           `json:"enforceMcpOauth"`
+		AIChatReadOnly       *bool           `json:"aiChatReadOnly"`
+		AIWorkspaceOnly      *bool           `json:"aiChatWorkspaceKnowledgeOnly"`
+		DisablePublicSharing *bool           `json:"disablePublicSharing"`
+		RestrictAPIAdmins    *bool           `json:"restrictApiToAdmins"`
+		AllowMemberTemplates *bool           `json:"allowMemberTemplates"`
+		DefaultPageEditMode  *string         `json:"defaultPageEditMode"`
 	}
 	if !decode(c, &request) {
 		return
@@ -491,6 +501,18 @@ func (handler *Handler) updateWorkspace(c *gin.Context) {
 	}
 	if request.EnforceSSO != nil && *request.EnforceSSO && !handler.requireFeature(c, "sso:custom") {
 		return
+	}
+	settings = setWorkspaceSetting(settings, request.GenerativeAI, "ai", "generative")
+	settings = setWorkspaceSetting(settings, request.AISearch, "ai", "search")
+	settings = setWorkspaceSetting(settings, request.MCPEnabled, "ai", "mcp")
+	settings = setWorkspaceSetting(settings, request.EnforceMCPOAuth, "ai", "enforceMcpOauth")
+	settings = setWorkspaceSetting(settings, request.AIChatReadOnly, "ai", "chatReadOnly")
+	settings = setWorkspaceSetting(settings, request.AIWorkspaceOnly, "ai", "chatWorkspaceKnowledgeOnly")
+	settings = setWorkspaceSetting(settings, request.DisablePublicSharing, "sharing", "disabled")
+	settings = setWorkspaceSetting(settings, request.RestrictAPIAdmins, "api", "restrictToAdmins")
+	settings = setWorkspaceSetting(settings, request.AllowMemberTemplates, "templates", "allowMemberTemplates")
+	if request.DefaultPageEditMode != nil {
+		settings = setWorkspaceScalarSetting(settings, "defaultPageEditMode", *request.DefaultPageEditMode)
 	}
 	workspace, err := handler.repository.UpdateWorkspace(c.Request.Context(), current.Workspace.ID, postgres.WorkspaceUpdate{
 		Name: request.Name, Description: request.Description, Logo: request.Logo,
