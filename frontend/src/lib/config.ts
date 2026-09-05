@@ -1,0 +1,134 @@
+import bytes from "bytes";
+import { castToBoolean } from "@/lib/utils.tsx";
+import { AvatarIconType } from "@/features/attachments/types/attachment.types.ts";
+import { sanitizeUrl } from "@docmost/editor-ext";
+
+declare global {
+  interface Window {
+    CONFIG?: Record<string, string>;
+  }
+}
+
+export function getAppName(): string {
+  return "Docmost";
+}
+
+export function getAppUrl(): string {
+  return `${window.location.protocol}//${window.location.host}`;
+}
+
+export function getServerAppUrl(): string {
+  return getConfigValue("APP_URL");
+}
+
+export function getBackendUrl(): string {
+  return getConfigValue("API_BASE_URL", getAppUrl() + "/api").replace(/\/$/, "");
+}
+
+export function getBackendOrigin(): string {
+  const backendUrl = new URL(getBackendUrl(), getAppUrl());
+  return backendUrl.origin;
+}
+
+export function getRealtimeUrl(): string {
+  return getConfigValue("REALTIME_URL", getAppUrl()).replace(/\/$/, "");
+}
+
+export function getRealtimeWebSocketUrl(): string {
+  const baseUrl = getConfigValue("REALTIME_URL") || getBackendOrigin();
+  const realtimeUrl = new URL("/realtime", baseUrl);
+  if (realtimeUrl.protocol === "https:") realtimeUrl.protocol = "wss:";
+  if (realtimeUrl.protocol === "http:") realtimeUrl.protocol = "ws:";
+  return realtimeUrl.toString();
+}
+
+export function getCollaborationUrl(roomName?: string): string {
+  const baseUrl =
+    getConfigValue("COLLAB_URL") ||
+    (import.meta.env.DEV ? getBackendOrigin() : getAppUrl());
+
+  const collabUrl = new URL(
+    roomName ? `/collab/${encodeURIComponent(roomName)}` : "/collab",
+    baseUrl,
+  );
+  collabUrl.protocol = collabUrl.protocol === "https:" ? "wss:" : "ws:";
+  return collabUrl.toString();
+}
+
+export function getSubdomainHost(): string {
+  return getConfigValue("SUBDOMAIN_HOST");
+}
+
+export function isCloud(): boolean {
+  return castToBoolean(getConfigValue("CLOUD"));
+}
+
+export function getAiVectorDriver(): string {
+  return getConfigValue("AI_VECTOR_DRIVER");
+}
+
+export function getAvatarUrl(
+  avatarUrl: string,
+  type: AvatarIconType = AvatarIconType.AVATAR,
+) {
+  if (!avatarUrl) return null;
+  if (avatarUrl?.startsWith("http")) return avatarUrl;
+
+  return getBackendUrl() + `/attachments/img/${type}/` + encodeURI(avatarUrl);
+}
+
+export function getSpaceUrl(spaceSlug: string) {
+  return "/s/" + spaceSlug;
+}
+
+export function getFileUrl(src: string) {
+  if (!src) return src;
+  if (src.startsWith("http")) return src;
+  if (src.startsWith("/api/")) {
+    // Remove the '/api' prefix
+    return getBackendUrl() + src.substring(4);
+  }
+  if (src.startsWith("/files/")) {
+    return getBackendUrl() + src;
+  }
+  return sanitizeUrl(src);
+}
+
+export function getFileUploadSizeLimit() {
+  const limit = getConfigValue("FILE_UPLOAD_SIZE_LIMIT", "50mb");
+  return bytes(limit);
+}
+
+export function getFileImportSizeLimit() {
+  const limit = getConfigValue("FILE_IMPORT_SIZE_LIMIT", "200mb");
+  return bytes(limit);
+}
+
+export function getDrawioUrl() {
+  return getConfigValue("DRAWIO_URL", "https://embed.diagrams.net");
+}
+
+export function getBillingTrialDays() {
+  return getConfigValue("BILLING_TRIAL_DAYS");
+}
+
+export function getPostHogHost() {
+  return getConfigValue("POSTHOG_HOST");
+}
+
+export function isPostHogEnabled(): boolean {
+  return Boolean(getPostHogHost() && getPostHogKey());
+}
+
+export function getPostHogKey() {
+  return getConfigValue("POSTHOG_KEY");
+}
+
+function getConfigValue(key: string, defaultValue: string = undefined): string {
+  // Node's StaticModule supplies window.CONFIG when the legacy monolith
+  // serves the client. A standalone build has no runtime HTML injection, so
+  // fall back to the values embedded by Vite during the client build.
+  const runtimeValue = window?.CONFIG?.[key];
+  const buildValue = process?.env?.[key];
+  return runtimeValue || buildValue || defaultValue;
+}

@@ -14,7 +14,7 @@ Centipede（千足虫）是一个可持续增加功能的模块化单体应用�
 - 本地注册/登录、短期 JWT Access Token 和 HttpOnly Refresh Cookie
 - 可替换的认证服务边界，预留 Allmacht Authorization Code + PKCE 适配器
 - 面向外文阅读的多语言词汇、来源和多条上下文 API
-- Vue 3 + Vite + TypeScript 阅读型工作台
+- Docmost React + Vite + TypeScript 前端
 
 ## 架构
 
@@ -25,7 +25,7 @@ internal/modules/            业务模块
 internal/platform/           配置、数据库、HTTP、迁移等基础设施
 migrations/                  Centipede 独占的 PostgreSQL 迁移
 api/                         OpenAPI 契约
-frontend/                    Vue 3 + Vite + TypeScript 前端应用
+frontend/                    Docmost React + Vite + TypeScript 前端应用
 ```
 
 每个复杂业务模块按需采用：
@@ -85,21 +85,19 @@ migration:
 
 当前 Go 服务直接访问 Docmost PostgreSQL 数据库，已覆盖认证、空间、页面、评论、搜索、附件、导入导出、协同编辑、实时通知和公开分享等主要链路。`legacy_base_url` 可以留空，只有尚未迁移的企业版能力、PDF OCR、完整 Confluence 导入等功能仍需要旧 Node 服务。
 
-### 独立启动 Docmost 前端
+### 启动 Docmost 前端
 
-Docmost 的 React 前端位于 `C:\\Users\\1\\Desktop\\projects\\docmost\\docmost\\apps\\client`，可以不依赖 Node 后端单独启动。若不使用 pending 功能，只需启动 Go 服务和前端：
+Docmost 的 React 前端已经复制到本仓库的 `frontend/`，前端开发和构建都在这个目录进行。它不需要启动 Node 后端，只需启动 Go 服务和前端：
 
 ```powershell
 # 终端 1：Centipede Go 后端
 Set-Location C:\\Users\\1\\Desktop\\projects\\Centipede
 go run ./cmd/api
 
-# 终端 2：独立 React 前端
-Set-Location C:\\Users\\1\\Desktop\\projects\\docmost\\docmost
-$env:API_BASE_URL="http://localhost:7788/api"
-$env:REALTIME_URL="http://localhost:7788"
-$env:COLLAB_URL="http://localhost:7788"
-corepack pnpm client:dev
+# 终端 2：React 前端
+Set-Location C:\\Users\\1\\Desktop\\projects\\Centipede\\frontend
+pnpm install
+pnpm dev
 ```
 
 如需使用 pending 功能，再启动 Node 服务，并在 Go 配置中设置 `migration.legacy_base_url`。
@@ -107,9 +105,9 @@ corepack pnpm client:dev
 扫描版 PDF 的 OCR 是可选外部能力，不依赖 Node。配置 `pdf_ocr.tesseract_path` 和
 `pdf_ocr.pdftoppm_path` 后，Go 后端会在文本提取为空时调用这两个程序；不配置时仍支持普通文本 PDF 导入，并会明确提示需要 OCR 配置。
 
-浏览器访问 `http://localhost:5173`。生产环境可使用 Docmost 前端仓库
-`C:\Users\1\Desktop\projects\docmost\docmost\Dockerfile.client` 构建 Nginx 静态前端；
-`API_BASE_URL`、`REALTIME_URL` 和 `COLLAB_URL` 可在构建时传入。
+浏览器访问 `http://localhost:5173`。生产环境执行 `pnpm build`，再将
+`frontend/dist/` 部署到静态 Web 服务器，并把 `/api`、`/collab` 和
+`/realtime` 转发到 Go 后端。
 
 ## 身份边界
 
@@ -145,7 +143,7 @@ corepack pnpm install
 corepack pnpm dev
 ```
 
-前端开发服务器会把 `/api` 代理到 `http://localhost:7788`；检查和生产构建使用 `corepack pnpm typecheck` 与 `corepack pnpm build`。
+前端开发服务器会把 `/api`、`/collab` 和 `/realtime` 代理到 `http://localhost:7788`；生产构建使用 `pnpm build`，预览使用 `pnpm preview`。
 
 ## 常用命令
 
