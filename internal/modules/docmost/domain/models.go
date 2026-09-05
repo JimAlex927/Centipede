@@ -325,3 +325,23 @@ type Attachment struct {
 	URL         string       `json:"url,omitempty"`
 	Creator     *UserSummary `json:"creator,omitempty"`
 }
+
+type FileTask struct {
+	ID           string          `json:"id"`
+	Type         *string         `json:"type"`
+	Source       *string         `json:"source"`
+	Status       *string         `json:"status"`
+	FileName     string          `json:"fileName"`
+	FilePath     string          `json:"filePath"`
+	FileSize     int64           `json:"fileSize"`
+	FileExt      *string         `json:"fileExt"`
+	ErrorMessage *string         `json:"errorMessage"`
+	CreatorID    *string         `json:"creatorId"`
+	PageID       *string         `json:"pageId"`
+	SpaceID      *string         `json:"spaceId"`
+	WorkspaceID  string          `json:"workspaceId"`
+	Metadata     json.RawMessage `json:"metadata"`
+	CreatedAt    time.Time       `json:"createdAt"`
+	UpdatedAt    time.Time       `json:"updatedAt"`
+	DeletedAt    *time.Time      `json:"deletedAt"`
+}

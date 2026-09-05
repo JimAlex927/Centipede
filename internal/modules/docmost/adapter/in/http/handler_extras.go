@@ -56,6 +56,52 @@ func (handler *Handler) registerExtraRoutes(router gin.IRouter) {
 	router.POST("/search/suggest", handler.suggest)
 }
 
+type fileTaskRequest struct {
+	FileTaskID   string `json:"fileTaskId"`
+	Cursor       string `json:"cursor"`
+	BeforeCursor string `json:"beforeCursor"`
+	Limit        int    `json:"limit"`
+}
+
+func (handler *Handler) fileTasks(c *gin.Context) {
+	current := currentPrincipal(c)
+	if !isAdmin(current.User) {
+		writeError(c, http.StatusForbidden, "Forbidden")
+		return
+	}
+	var request fileTaskRequest
+	if !decodeOptional(c, &request) {
+		return
+	}
+	result, err := handler.repository.FileTasks(c.Request.Context(), current.Workspace.ID, current.User.ID, request.Cursor, request.BeforeCursor, request.Limit)
+	if err != nil {
+		if errors.Is(err, postgres.ErrInvalidInput) {
+			writeError(c, http.StatusBadRequest, "Invalid pagination cursor")
+		} else {
+			writeError(c, http.StatusInternalServerError, "Failed to load file tasks")
+		}
+		return
+	}
+	writeData(c, http.StatusOK, result)
+}
+
+func (handler *Handler) fileTaskInfo(c *gin.Context) {
+	var request fileTaskRequest
+	if !decode(c, &request) || request.FileTaskID == "" {
+		return
+	}
+	current := currentPrincipal(c)
+	task, err := handler.repository.FileTaskByID(c.Request.Context(), request.FileTaskID, current.Workspace.ID)
+	if err != nil || task.SpaceID == nil {
+		writeError(c, http.StatusNotFound, "File task not found")
+		return
+	}
+	if !handler.requireSpaceRole(c, *task.SpaceID, "reader") {
+		return
+	}
+	writeData(c, http.StatusOK, task)
+}
+
 type workspaceMemberRequest struct {
 	UserID string `json:"userId"`
 	Role   string `json:"role"`
