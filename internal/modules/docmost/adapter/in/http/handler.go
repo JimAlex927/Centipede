@@ -65,6 +65,7 @@ func (handler *Handler) Register(router gin.IRouter) {
 	api.POST("/shares/info", handler.shareInfo)
 	api.POST("/shares/page-info", handler.sharedPageInfo)
 	api.POST("/shares/tree", handler.shareTree)
+	api.POST("/search/share-search", handler.shareSearch)
 	api.GET("/attachments/img/:attachmentId/:fileName", handler.getPublicImage)
 	api.POST("/version", handler.version)
 

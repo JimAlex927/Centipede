@@ -659,6 +659,69 @@ LIMIT $4`, workspaceID, query, spaceID, normalizeLimit(limit), viewerID, viewerA
 	return items, rows.Err()
 }
 
+func (repository *Repository) SearchSharedPages(ctx context.Context, shareID, query string, limit int) ([]domain.SearchPage, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return []domain.SearchPage{}, nil
+	}
+	rows, err := repository.db.Query(ctx, `
+WITH RECURSIVE shared AS (
+  SELECT sh.page_id, COALESCE(sh.include_sub_pages, false) AS include_sub_pages,
+         sh.workspace_id
+  FROM shares sh
+  WHERE (sh.id::text = $1 OR lower(sh.key) = lower($1))
+    AND sh.deleted_at IS NULL
+), tree AS (
+  SELECT p.id, p.parent_page_id, s.include_sub_pages, s.workspace_id
+  FROM pages p JOIN shared s ON s.page_id = p.id
+  WHERE p.workspace_id = s.workspace_id AND p.deleted_at IS NULL
+  UNION ALL
+  SELECT child.id, child.parent_page_id, tree.include_sub_pages, tree.workspace_id
+  FROM pages child JOIN tree ON child.parent_page_id = tree.id
+  WHERE tree.include_sub_pages AND child.workspace_id = tree.workspace_id
+    AND child.deleted_at IS NULL
+)
+SELECT p.id::text, p.title, p.icon, p.parent_page_id::text, p.slug_id, p.creator_id::text,
+ p.created_at, p.updated_at,
+ similarity(COALESCE(p.title, ''), $2)::real,
+ ts_headline('simple', COALESCE(p.text_content, ''), plainto_tsquery('simple', $2)),
+ s.id::text, s.name, s.slug
+FROM pages p
+JOIN tree t ON t.id = p.id
+JOIN spaces s ON s.id = p.space_id
+WHERE p.deleted_at IS NULL
+  AND (COALESCE(p.title, '') ILIKE '%' || $2 || '%'
+       OR COALESCE(p.text_content, '') ILIKE '%' || $2 || '%')
+  AND NOT EXISTS (
+    WITH RECURSIVE ancestors AS (
+      SELECT ap.id, ap.parent_page_id
+      FROM pages ap WHERE ap.id = p.id AND ap.workspace_id = t.workspace_id
+      UNION ALL
+      SELECT parent.id, parent.parent_page_id
+      FROM pages parent JOIN ancestors a ON a.parent_page_id = parent.id
+      WHERE parent.workspace_id = t.workspace_id
+    )
+    SELECT 1 FROM ancestors a JOIN page_access pa ON pa.page_id = a.id
+  )
+ORDER BY similarity(COALESCE(p.title, ''), $2) DESC, p.updated_at DESC
+LIMIT $3`, shareID, query, normalizeLimit(limit))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]domain.SearchPage, 0)
+	for rows.Next() {
+		var item domain.SearchPage
+		var space domain.SpaceSummary
+		if err := rows.Scan(&item.ID, &item.Title, &item.Icon, &item.ParentPageID, &item.SlugID, &item.CreatorID, &item.CreatedAt, &item.UpdatedAt, &item.Rank, &item.Highlight, &space.ID, &space.Name, &space.Slug); err != nil {
+			return nil, err
+		}
+		item.Space = &space
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func (repository *Repository) Suggestions(ctx context.Context, workspaceID, query string, includeUsers, includeGroups, includePages bool, spaceID *string, limit int, viewerID string, viewerAdmin bool) (map[string]any, error) {
 	result := map[string]any{}
 	like := "%" + strings.TrimSpace(query) + "%"

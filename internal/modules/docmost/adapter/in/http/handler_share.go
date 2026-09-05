@@ -17,6 +17,31 @@ type shareRequest struct {
 	Limit           int    `json:"limit"`
 }
 
+func (handler *Handler) shareSearch(c *gin.Context) {
+	var request struct {
+		ShareID string `json:"shareId"`
+		Query   string `json:"query"`
+		Limit   int    `json:"limit"`
+	}
+	if !decode(c, &request) {
+		return
+	}
+	if request.ShareID == "" {
+		writeError(c, http.StatusBadRequest, "shareId is required")
+		return
+	}
+	if _, err := handler.publicShare(c, request.ShareID); err != nil {
+		writeError(c, http.StatusNotFound, "Share not found")
+		return
+	}
+	items, err := handler.repository.SearchSharedPages(c.Request.Context(), request.ShareID, request.Query, request.Limit)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to search shared pages")
+		return
+	}
+	writeData(c, http.StatusOK, gin.H{"items": items})
+}
+
 func (handler *Handler) shares(c *gin.Context) {
 	var request shareRequest
 	if !decodeOptional(c, &request) {
