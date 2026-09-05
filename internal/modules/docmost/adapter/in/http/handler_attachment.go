@@ -372,6 +372,12 @@ func (handler *Handler) serveAttachment(c *gin.Context, attachment domain.Attach
 	} else {
 		c.Header("Cache-Control", "private, max-age=86400")
 	}
+	// The editor renders PDFs and other inline attachments in an iframe. The
+	// global security middleware sets X-Frame-Options: DENY for normal pages,
+	// but that header would also block this already-authorized attachment.
+	// Keep the attachment-specific CSP below and allow the browser to render
+	// inline previews.
+	c.Writer.Header().Del("X-Frame-Options")
 	c.Header("Content-Security-Policy", "base-uri 'none'; object-src 'self'; default-src 'self';")
 	if attachment.Type != nil && *attachment.Type == "file" && !inlineExtension(attachment.FileExt) {
 		c.Header("Content-Disposition", fmt.Sprintf("attachment; filename*=UTF-8''%s", url.PathEscape(attachment.FileName)))
