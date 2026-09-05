@@ -136,6 +136,7 @@ func (handler *Handler) Register(router gin.IRouter) {
 	protected.POST("/pages/history/info", handler.pageHistoryInfo)
 	protected.POST("/pages/export", handler.exportPage)
 	protected.POST("/pages/transclusion/lookup", handler.transclusionLookup)
+	protected.POST("/pages/transclusion/references", handler.transclusionReferences)
 	protected.POST("/file-tasks", handler.fileTasks)
 	protected.POST("/file-tasks/info", handler.fileTaskInfo)
 

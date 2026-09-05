@@ -25,6 +25,26 @@ type duplicatePageRow struct {
 	Depth        int
 }
 
+func (repository *Repository) PageTransclusionReferenceIDs(ctx context.Context, sourcePageID, transclusionID, workspaceID string) ([]string, error) {
+	rows, err := repository.db.Query(ctx, `
+SELECT reference_page_id::text
+FROM page_transclusion_references
+WHERE source_page_id = $1 AND transclusion_id = $2 AND workspace_id = $3`, sourcePageID, transclusionID, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := make([]string, 0)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 func (repository *Repository) DuplicatePage(ctx context.Context, pageID, targetSpaceID, workspaceID, userID string) (domain.Page, []string, error) {
 	rows, err := repository.db.Query(ctx, `
 WITH RECURSIVE tree AS (

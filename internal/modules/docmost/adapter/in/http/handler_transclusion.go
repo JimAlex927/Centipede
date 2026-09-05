@@ -32,6 +32,45 @@ func (handler *Handler) transclusionLookup(c *gin.Context) {
 	writeData(c, http.StatusOK, gin.H{"items": items})
 }
 
+func (handler *Handler) transclusionReferences(c *gin.Context) {
+	var request transclusionReference
+	if !decode(c, &request) {
+		return
+	}
+	current := currentPrincipal(c)
+	response := gin.H{"source": nil, "references": []any{}}
+	source, err := handler.repository.PageByID(c.Request.Context(), request.SourcePageID, request.SourcePageID, current.Workspace.ID, false)
+	if err != nil {
+		writeData(c, http.StatusOK, response)
+		return
+	}
+	if handler.canViewPage(c, current, source) {
+		response["source"] = transclusionPageInfo(source)
+	}
+	ids, err := handler.repository.PageTransclusionReferenceIDs(c.Request.Context(), request.SourcePageID, request.TransclusionID, current.Workspace.ID)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to load transclusion references")
+		return
+	}
+	references := make([]any, 0, len(ids))
+	for _, id := range ids {
+		page, pageErr := handler.repository.PageByID(c.Request.Context(), id, id, current.Workspace.ID, false)
+		if pageErr == nil && handler.canViewPage(c, current, page) {
+			references = append(references, transclusionPageInfo(page))
+		}
+	}
+	response["references"] = references
+	writeData(c, http.StatusOK, response)
+}
+
+func transclusionPageInfo(page domain.Page) gin.H {
+	var spaceSlug *string
+	if page.Space != nil {
+		spaceSlug = &page.Space.Slug
+	}
+	return gin.H{"id": page.ID, "slugId": page.SlugID, "title": page.Title, "icon": page.Icon, "spaceId": page.SpaceID, "spaceSlug": spaceSlug}
+}
+
 func (handler *Handler) lookupTransclusionForUser(c *gin.Context, current principal, reference transclusionReference) map[string]any {
 	base := map[string]any{"sourcePageId": reference.SourcePageID, "transclusionId": reference.TransclusionID}
 	if reference.SourcePageID == "" || reference.TransclusionID == "" {
