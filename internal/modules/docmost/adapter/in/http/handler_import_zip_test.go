@@ -27,6 +27,21 @@ func TestZipResourcePath(t *testing.T) {
 	if got := zipResourcePath("docs/page.md", "https://example.com/image.png"); got != "" {
 		t.Fatalf("external resource should not be imported: %q", got)
 	}
+	if got := zipResourcePathForSource("Page.html", "/download/attachments/diagram.png?version=1", "confluence"); got != "attachments/diagram.png" {
+		t.Fatalf("unexpected Confluence resource path: %q", got)
+	}
+}
+
+func TestZipImportTitleStripsNotionIDs(t *testing.T) {
+	if got := zipImportTitle("Project plan 0123456789abcdef0123456789abcdef", "notion"); got != "Project plan" {
+		t.Fatalf("Notion page id was not stripped: %q", got)
+	}
+	if got := zipImportTitle("Project plan abcd-1234", "notion"); got != "Project plan" {
+		t.Fatalf("Notion partial page id was not stripped: %q", got)
+	}
+	if got := zipImportTitle("Project plan 0123456789abcdef0123456789abcdef", "generic"); got == "Project plan" {
+		t.Fatal("generic import unexpectedly stripped a title suffix")
+	}
 }
 
 func TestMarkdownImageImport(t *testing.T) {

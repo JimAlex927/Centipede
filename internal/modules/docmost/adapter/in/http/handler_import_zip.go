@@ -13,6 +13,7 @@ import (
 	"net/url"
 	pathpkg "path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -85,7 +86,7 @@ func (handler *Handler) importZip(c *gin.Context) {
 		writeError(c, http.StatusInternalServerError, "Failed to create import task")
 		return
 	}
-	if err := handler.processGenericZip(c, data, spaceID, current); err != nil {
+	if err := handler.processGenericZip(c, data, spaceID, source, current); err != nil {
 		message := err.Error()
 		_ = handler.repository.UpdateFileTaskStatus(c.Request.Context(), task.ID, current.Workspace.ID, "failed", message)
 		task.ErrorMessage = &message
@@ -104,7 +105,7 @@ func isSupportedZipImportSource(source string) bool {
 	return source == "generic" || source == "notion" || source == "confluence"
 }
 
-func (handler *Handler) processGenericZip(c *gin.Context, data []byte, spaceID string, current principal) error {
+func (handler *Handler) processGenericZip(c *gin.Context, data []byte, spaceID, source string, current principal) error {
 	archive, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
 		return errors.New("invalid ZIP archive")
@@ -148,7 +149,7 @@ func (handler *Handler) processGenericZip(c *gin.Context, data []byte, spaceID s
 	})
 	pageByPath := make(map[string]string)
 	for _, directory := range directoriesList {
-		title := pathpkg.Base(directory)
+		title := zipImportTitle(pathpkg.Base(directory), source)
 		page, createErr := handler.repository.CreatePage(c.Request.Context(), current.Workspace.ID, current.User.ID, postgres.PageInput{Title: &title, SpaceID: &spaceID, ParentPageID: optionalString(pageByPath[pathpkg.Dir(directory)]), Content: []byte(`{"type":"doc","content":[]}`)})
 		if createErr != nil {
 			return createErr
@@ -165,7 +166,7 @@ func (handler *Handler) processGenericZip(c *gin.Context, data []byte, spaceID s
 		if parseErr != nil {
 			return parseErr
 		}
-		title, nodes := extractImportedTitle(nodes, strings.TrimSuffix(pathpkg.Base(entry.Path), filepath.Ext(entry.Path)))
+		title, nodes := extractImportedTitle(nodes, zipImportTitle(strings.TrimSuffix(pathpkg.Base(entry.Path), filepath.Ext(entry.Path)), source))
 		content, marshalErr := json.Marshal(importNode{Type: "doc", Content: nodes})
 		if marshalErr != nil {
 			return marshalErr
@@ -174,7 +175,7 @@ func (handler *Handler) processGenericZip(c *gin.Context, data []byte, spaceID s
 		if createErr != nil {
 			return createErr
 		}
-		if err := handler.importZipAttachments(c, page.ID, page.SpaceID, entry.Path, nodes, assets, current); err != nil {
+		if err := handler.importZipAttachments(c, page.ID, page.SpaceID, entry.Path, source, nodes, assets, current); err != nil {
 			return err
 		}
 		updatedContent, marshalErr := json.Marshal(importNode{Type: "doc", Content: nodes})
@@ -188,7 +189,7 @@ func (handler *Handler) processGenericZip(c *gin.Context, data []byte, spaceID s
 	return nil
 }
 
-func (handler *Handler) importZipAttachments(c *gin.Context, pageID, spaceID, pagePath string, nodes []importNode, assets map[string]*zip.File, current principal) error {
+func (handler *Handler) importZipAttachments(c *gin.Context, pageID, spaceID, pagePath, source string, nodes []importNode, assets map[string]*zip.File, current principal) error {
 	if handler.storage == nil || len(assets) == 0 {
 		return nil
 	}
@@ -207,7 +208,7 @@ func (handler *Handler) importZipAttachments(c *gin.Context, pageID, spaceID, pa
 						resource = value
 					}
 				}
-				resourcePath := zipResourcePath(pagePath, resource)
+				resourcePath := zipResourcePathForSource(pagePath, resource, source)
 				if file, ok := assets[resourcePath]; ok {
 					attachmentID, importedOK := imported[resourcePath]
 					if !importedOK {
@@ -277,12 +278,39 @@ func (handler *Handler) createImportedAttachment(c *gin.Context, pageID, spaceID
 }
 
 func zipResourcePath(pagePath, resource string) string {
+	return zipResourcePathForSource(pagePath, resource, "generic")
+}
+
+func zipResourcePathForSource(pagePath, resource, source string) string {
 	parsed, err := url.Parse(strings.TrimSpace(resource))
 	if err != nil || parsed.IsAbs() || parsed.Path == "" {
 		return ""
 	}
 	resourcePath := strings.ReplaceAll(parsed.Path, "\\", "/")
+	if unescaped, unescapeErr := url.PathUnescape(resourcePath); unescapeErr == nil {
+		resourcePath = unescaped
+	}
+	if source == "confluence" {
+		resourcePath = strings.TrimPrefix(resourcePath, "/")
+		resourcePath = strings.TrimPrefix(resourcePath, "download/")
+		if strings.HasPrefix(resourcePath, "attachments/") {
+			return pathpkg.Clean(resourcePath)
+		}
+	}
 	return strings.TrimPrefix(pathpkg.Clean(pathpkg.Join(pathpkg.Dir(pagePath), resourcePath)), "./")
+}
+
+var (
+	notionPageIDSuffix    = regexp.MustCompile(`[ -]?[a-z0-9]{32}$`)
+	notionPartialIDSuffix = regexp.MustCompile(` [a-f0-9]{4}-[a-f0-9]{4}$`)
+)
+
+func zipImportTitle(value, source string) string {
+	if source != "notion" {
+		return value
+	}
+	value = notionPageIDSuffix.ReplaceAllString(value, "")
+	return strings.TrimSpace(notionPartialIDSuffix.ReplaceAllString(value, ""))
 }
 
 func addZipParentDirectories(directories map[string]bool, directory string) {
