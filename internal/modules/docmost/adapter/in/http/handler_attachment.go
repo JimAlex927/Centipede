@@ -316,6 +316,10 @@ func (handler *Handler) getPublicImage(c *gin.Context) {
 		// values and newly generated URLs follow the Node-compatible format.
 		attachment, err = handler.repository.AttachmentByPublicImageID(c.Request.Context(), attachmentKey)
 	} else {
+		if !isPublicImageType(attachmentKey) {
+			writeError(c, http.StatusBadRequest, "Invalid image attachment type")
+			return
+		}
 		workspace, workspaceErr := handler.repository.OnlyWorkspace(c.Request.Context())
 		if workspaceErr != nil {
 			err = workspaceErr
@@ -328,6 +332,15 @@ func (handler *Handler) getPublicImage(c *gin.Context) {
 		return
 	}
 	handler.serveAttachment(c, attachment, true)
+}
+
+func isPublicImageType(value string) bool {
+	switch value {
+	case "avatar", "space-icon", "workspace-icon":
+		return true
+	default:
+		return false
+	}
 }
 
 func (handler *Handler) serveAttachment(c *gin.Context, attachment domain.Attachment, public bool) {
