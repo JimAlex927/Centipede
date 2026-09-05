@@ -45,6 +45,12 @@ WHERE source_page_id = $1 AND transclusion_id = $2 AND workspace_id = $3`, sourc
 	return ids, rows.Err()
 }
 
+func (repository *Repository) DeletePageTransclusionReference(ctx context.Context, referencePageID, sourcePageID, transclusionID, workspaceID string) error {
+	_, err := repository.db.Exec(ctx, `DELETE FROM page_transclusion_references
+WHERE reference_page_id = $1 AND source_page_id = $2 AND transclusion_id = $3 AND workspace_id = $4`, referencePageID, sourcePageID, transclusionID, workspaceID)
+	return err
+}
+
 func (repository *Repository) DuplicatePage(ctx context.Context, pageID, targetSpaceID, workspaceID, userID string) (domain.Page, []string, error) {
 	rows, err := repository.db.Query(ctx, `
 WITH RECURSIVE tree AS (

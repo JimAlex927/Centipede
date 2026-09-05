@@ -63,6 +63,45 @@ func (handler *Handler) transclusionReferences(c *gin.Context) {
 	writeData(c, http.StatusOK, response)
 }
 
+func (handler *Handler) unsyncTransclusionReference(c *gin.Context) {
+	var request struct {
+		ReferencePageID string `json:"referencePageId"`
+		SourcePageID    string `json:"sourcePageId"`
+		TransclusionID  string `json:"transclusionId"`
+	}
+	if !decode(c, &request) {
+		return
+	}
+	current := currentPrincipal(c)
+	referencePage, err := handler.repository.PageByID(c.Request.Context(), request.ReferencePageID, request.ReferencePageID, current.Workspace.ID, false)
+	if err != nil {
+		handler.writeRepositoryError(c, err, "Reference page not found")
+		return
+	}
+	if !handler.requirePageAccess(c, referencePage, true) {
+		return
+	}
+	sourcePage, err := handler.repository.PageByID(c.Request.Context(), request.SourcePageID, request.SourcePageID, current.Workspace.ID, false)
+	if err != nil {
+		handler.writeRepositoryError(c, err, "Source page not found")
+		return
+	}
+	if !handler.canViewPage(c, current, sourcePage) {
+		writeError(c, http.StatusForbidden, "Forbidden")
+		return
+	}
+	content, found := transclusionContent(sourcePage.Content, request.TransclusionID)
+	if !found {
+		writeError(c, http.StatusNotFound, "Transclusion not found")
+		return
+	}
+	if err := handler.repository.DeletePageTransclusionReference(c.Request.Context(), referencePage.ID, sourcePage.ID, request.TransclusionID, current.Workspace.ID); err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to unsync transclusion")
+		return
+	}
+	writeData(c, http.StatusOK, gin.H{"content": content})
+}
+
 func transclusionPageInfo(page domain.Page) gin.H {
 	var spaceSlug *string
 	if page.Space != nil {
