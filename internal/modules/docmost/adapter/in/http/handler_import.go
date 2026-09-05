@@ -162,7 +162,10 @@ func parseMarkdown(reader io.Reader) ([]importNode, error) {
 		var paragraph strings.Builder
 		for index < len(lines) {
 			current := strings.TrimSpace(lines[index])
-			if current == "" || strings.HasPrefix(current, "#") || strings.HasPrefix(current, "```") || strings.HasPrefix(current, "~~~") {
+			if current == "" || strings.HasPrefix(current, "```") || strings.HasPrefix(current, "~~~") {
+				break
+			}
+			if _, _, heading := markdownHeading(current); heading {
 				break
 			}
 			if paragraph.Len() > 0 {

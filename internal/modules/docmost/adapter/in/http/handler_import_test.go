@@ -20,6 +20,13 @@ func TestParseMarkdownImport(t *testing.T) {
 	}
 }
 
+func TestParseMarkdownLiteralHashDoesNotLoop(t *testing.T) {
+	nodes, err := parseMarkdown(strings.NewReader("#not a heading"))
+	if err != nil || len(nodes) != 1 || nodes[0].Type != "paragraph" {
+		t.Fatalf("unexpected literal hash parsing: nodes=%#v err=%v", nodes, err)
+	}
+}
+
 func TestParseHTMLImport(t *testing.T) {
 	nodes, err := parseImportedDocument(strings.NewReader("<html><body><h2>Title</h2><p>Hello <strong>world</strong>.</p><ul><li>one</li></ul></body></html>"), ".html")
 	if err != nil {
