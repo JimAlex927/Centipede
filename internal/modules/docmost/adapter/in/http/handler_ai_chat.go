@@ -601,8 +601,13 @@ func (handler *Handler) aiAnswers(c *gin.Context) {
 		writeError(c, http.StatusInternalServerError, "Failed to search workspace knowledge")
 		return
 	}
+	attachments, err := handler.repository.SearchAttachments(c.Request.Context(), current.Workspace.ID, request.Query, request.SpaceID, request.Limit, current.User.ID, isAdmin(current.User))
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to search workspace attachments")
+		return
+	}
 	contextText := strings.Builder{}
-	sources := make([]gin.H, 0, len(pages))
+	sources := make([]gin.H, 0, len(pages)+len(attachments))
 	for _, page := range pages {
 		title := ""
 		if page.Title != nil {
@@ -612,6 +617,22 @@ func (handler *Handler) aiAnswers(c *gin.Context) {
 		contextText.WriteString("Title: " + title + "\nExcerpt: " + excerpt + "\n\n")
 		similarity := float64(page.Rank)
 		sources = append(sources, gin.H{"pageId": page.ID, "title": title, "slugId": page.SlugID, "spaceSlug": page.Space.Slug, "similarity": similarity, "distance": 1 - similarity, "chunkIndex": 0, "excerpt": excerpt})
+	}
+	for _, attachment := range attachments {
+		title, slugID, spaceSlug := attachment.FileName, "", ""
+		if attachment.Page != nil {
+			if attachment.Page.Title != nil && strings.TrimSpace(*attachment.Page.Title) != "" {
+				title = *attachment.Page.Title + " / " + attachment.FileName
+			}
+			slugID = attachment.Page.SlugID
+		}
+		if attachment.Space != nil {
+			spaceSlug = attachment.Space.Slug
+		}
+		excerpt := attachment.Highlight
+		contextText.WriteString("Attachment: " + attachment.FileName + "\nExcerpt: " + excerpt + "\n\n")
+		similarity := float64(attachment.Rank)
+		sources = append(sources, gin.H{"pageId": attachment.PageID, "attachmentId": attachment.ID, "title": title, "slugId": slugID, "spaceSlug": spaceSlug, "similarity": similarity, "distance": 1 - similarity, "chunkIndex": 0, "excerpt": excerpt})
 	}
 	completion, err := handler.aiProvider.Complete(c.Request.Context(), []application.AIMessage{
 		{Role: "system", Content: "Answer the user's question using only the supplied Docmost workspace excerpts. If the excerpts do not contain the answer, say so."},
