@@ -334,11 +334,13 @@ func (handler *Handler) processGenericZip(ctx context.Context, data []byte, spac
 		if err := handler.importZipAttachments(ctx, pageID, spaceID, entry.Path, source, nodes, assets, current); err != nil {
 			return err
 		}
-		updatedContent, marshalErr := json.Marshal(importNode{Type: "doc", Content: nodes})
+		fallbackTitle := zipImportTitle(strings.TrimSuffix(pathpkg.Base(entry.Path), filepath.Ext(entry.Path)), source)
+		pageTitle, contentNodes := extractImportedTitle(nodes, fallbackTitle)
+		updatedContent, marshalErr := json.Marshal(importNode{Type: "doc", Content: contentNodes})
 		if marshalErr != nil {
 			return marshalErr
 		}
-		if _, updateErr := handler.repository.UpdatePage(ctx, pageByEntryPath[entry.Path], current.Workspace.ID, current.User.ID, postgres.PageInput{Content: updatedContent}); updateErr != nil {
+		if _, updateErr := handler.repository.UpdatePage(ctx, pageByEntryPath[entry.Path], current.Workspace.ID, current.User.ID, postgres.PageInput{Title: &pageTitle, Content: updatedContent}); updateErr != nil {
 			return updateErr
 		}
 	}

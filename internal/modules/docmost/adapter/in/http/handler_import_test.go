@@ -45,6 +45,38 @@ func TestParseHTMLImport(t *testing.T) {
 	}
 }
 
+func TestParseHTMLDocmostCustomNodes(t *testing.T) {
+	html := `<html><body>
+<div data-type="drawio" data-src="files/diagram.drawio.svg" data-title="diagram" data-width="600"></div>
+<div data-type="attachment" data-attachment-url="files/manual.pdf" data-attachment-name="manual.pdf" data-attachment-mime="application/pdf"></div>
+<video src="media/demo.mp4" width="720" data-attachment-id="video-1"></video>
+<audio><source src="media/sound.mp3"></audio>
+<div data-type="callout" data-callout-type="warning"><p>注意</p></div>
+</body></html>`
+	nodes, err := parseImportedDocument(strings.NewReader(html), ".html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 5 {
+		t.Fatalf("unexpected custom node count: %#v", nodes)
+	}
+	if nodes[0].Type != "drawio" || nodes[0].Attrs["src"] != "files/diagram.drawio.svg" {
+		t.Fatalf("drawio node was not preserved: %#v", nodes[0])
+	}
+	if nodes[1].Type != "attachment" || nodes[1].Attrs["url"] != "files/manual.pdf" {
+		t.Fatalf("attachment node was not preserved: %#v", nodes[1])
+	}
+	if nodes[2].Type != "video" || nodes[2].Attrs["src"] != "media/demo.mp4" {
+		t.Fatalf("video node was not preserved: %#v", nodes[2])
+	}
+	if nodes[3].Type != "audio" || nodes[3].Attrs["src"] != "media/sound.mp3" {
+		t.Fatalf("audio node was not preserved: %#v", nodes[3])
+	}
+	if nodes[4].Type != "callout" || len(nodes[4].Content) != 1 || importPlainText(nodes[4].Content) != "注意" {
+		t.Fatalf("callout content was not preserved: %#v", nodes[4])
+	}
+}
+
 func TestParseDocxImport(t *testing.T) {
 	title := "DOCX title"
 	data, err := buildDocx(domain.Page{Title: &title, Content: []byte(`{"type":"doc","content":[{"type":"heading","attrs":{"level":2},"content":[{"type":"text","text":"Section"}]},{"type":"paragraph","content":[{"type":"text","text":"Hello ","marks":[{"type":"bold"}]},{"type":"text","text":"world"}]}]}`)})

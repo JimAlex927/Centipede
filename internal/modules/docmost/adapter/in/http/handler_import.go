@@ -707,6 +707,10 @@ func parseHTMLRoot(root *htmlnode.Node) []importNode {
 	var walk func(*htmlnode.Node)
 	walk = func(node *htmlnode.Node) {
 		if node.Type == htmlnode.ElementNode {
+			if special, ok := htmlSpecialBlock(node); ok {
+				result = append(result, special)
+				return
+			}
 			tag := strings.ToLower(node.Data)
 			switch {
 			case tag == "html" || tag == "head" || tag == "body" || tag == "main":
@@ -761,6 +765,10 @@ func htmlBlockChildren(node *htmlnode.Node) []importNode {
 		if child.Type != htmlnode.ElementNode {
 			continue
 		}
+		if special, ok := htmlSpecialBlock(child); ok {
+			result = append(result, special)
+			continue
+		}
 		tag := strings.ToLower(child.Data)
 		switch tag {
 		case "p":
@@ -789,18 +797,17 @@ func htmlInline(node *htmlnode.Node) []importNode {
 			return
 		}
 		if current.Type == htmlnode.ElementNode {
+			if special, ok := htmlSpecialBlock(current); ok {
+				result = append(result, special)
+				return
+			}
 			tag := strings.ToLower(current.Data)
 			if tag == "br" {
 				result = append(result, importNode{Type: "hardBreak"})
 				return
 			}
 			if tag == "img" {
-				attrs := map[string]any{}
-				for _, attr := range current.Attr {
-					if attr.Key == "src" || attr.Key == "alt" {
-						attrs[attr.Key] = attr.Val
-					}
-				}
+				attrs := htmlMediaAttributes(current, "src")
 				result = append(result, importNode{Type: "image", Attrs: attrs})
 				return
 			}
@@ -830,6 +837,139 @@ func htmlInline(node *htmlnode.Node) []importNode {
 		walk(child, nil)
 	}
 	return result
+}
+
+// htmlSpecialBlock preserves the custom Tiptap nodes emitted by Docmost's
+// HTML exporter. A generic HTML walker would otherwise recurse into these
+// atom nodes and silently discard their attachment URL and metadata.
+func htmlSpecialBlock(node *htmlnode.Node) (importNode, bool) {
+	if node == nil || node.Type != htmlnode.ElementNode {
+		return importNode{}, false
+	}
+	tag := strings.ToLower(node.Data)
+	dataType := strings.ToLower(htmlAttribute(node, "data-type"))
+	if tag == "img" {
+		return importNode{Type: "image", Attrs: htmlMediaAttributes(node, "src")}, true
+	}
+	if tag == "video" || tag == "audio" {
+		attrs := htmlMediaAttributes(node, "src")
+		if htmlAttribute(node, "src") == "" {
+			for child := node.FirstChild; child != nil; child = child.NextSibling {
+				if child.Type == htmlnode.ElementNode && strings.EqualFold(child.Data, "source") {
+					if source := htmlAttribute(child, "src"); source != "" {
+						attrs["src"] = source
+						break
+					}
+				}
+			}
+		}
+		if tag == "video" {
+			return importNode{Type: "video", Attrs: attrs}, true
+		}
+		return importNode{Type: "audio", Attrs: attrs}, true
+	}
+	if tag != "div" && tag != "span" {
+		return importNode{}, false
+	}
+	if dataType == "" {
+		return importNode{}, false
+	}
+	switch dataType {
+	case "attachment":
+		attrs := htmlAttributes(node, map[string]string{
+			"data-attachment-url":  "url",
+			"data-attachment-name": "name",
+			"data-attachment-mime": "mime",
+			"data-attachment-size": "size",
+			"data-attachment-id":   "attachmentId",
+		})
+		return importNode{Type: "attachment", Attrs: attrs}, true
+	case "pdf":
+		attrs := htmlAttributes(node, map[string]string{
+			"src":                "src",
+			"data-name":          "name",
+			"data-size":          "size",
+			"data-attachment-id": "attachmentId",
+			"width":              "width",
+			"height":             "height",
+		})
+		return importNode{Type: "pdf", Attrs: attrs}, true
+	case "drawio", "excalidraw":
+		attrs := htmlAttributes(node, map[string]string{
+			"data-src":           "src",
+			"data-title":         "title",
+			"data-alt":           "alt",
+			"data-width":         "width",
+			"data-height":        "height",
+			"data-align":         "align",
+			"data-size":          "size",
+			"data-attachment-id": "attachmentId",
+		})
+		return importNode{Type: dataType, Attrs: attrs}, true
+	case "embed":
+		attrs := htmlAttributes(node, map[string]string{
+			"data-src":      "src",
+			"data-provider": "provider",
+			"data-width":    "width",
+			"data-height":   "height",
+			"data-align":    "align",
+		})
+		return importNode{Type: "embed", Attrs: attrs}, true
+	case "mathblock":
+		return importNode{Type: "mathBlock", Attrs: map[string]any{"text": htmlText(node)}}, true
+	case "mathinline":
+		return importNode{Type: "mathInline", Attrs: map[string]any{"text": htmlText(node)}}, true
+	case "callout":
+		return importNode{Type: "callout", Attrs: htmlAttributes(node, map[string]string{
+			"data-callout-type": "type",
+			"data-callout-icon": "icon",
+		}), Content: htmlBlockChildren(node)}, true
+	case "columns":
+		return importNode{Type: "columns", Attrs: htmlAttributes(node, map[string]string{
+			"data-layout":     "layout",
+			"data-width-mode": "widthMode",
+		}), Content: htmlBlockChildren(node)}, true
+	case "column":
+		return importNode{Type: "column", Content: htmlBlockChildren(node)}, true
+	default:
+		return importNode{}, false
+	}
+}
+
+func htmlMediaAttributes(node *htmlnode.Node, sourceAttribute string) map[string]any {
+	return htmlAttributes(node, map[string]string{
+		sourceAttribute:      "src",
+		"alt":                "alt",
+		"aria-label":         "alt",
+		"width":              "width",
+		"height":             "height",
+		"data-align":         "align",
+		"data-size":          "size",
+		"data-aspect-ratio":  "aspectRatio",
+		"data-attachment-id": "attachmentId",
+	})
+}
+
+func htmlAttributes(node *htmlnode.Node, mapping map[string]string) map[string]any {
+	attrs := make(map[string]any, len(mapping))
+	for source, destination := range mapping {
+		if value := htmlAttribute(node, source); value != "" {
+			attrs[destination] = value
+		}
+	}
+	return attrs
+}
+
+func htmlAttribute(node *htmlnode.Node, name string) string {
+	if node == nil {
+		return ""
+	}
+	for _, attr := range node.Attr {
+		if strings.EqualFold(attr.Key, name) {
+			return strings.TrimSpace(attr.Val)
+		}
+	}
+	return ""
 }
 
 func appendMarks(marks []importMark, kind string) []importMark {
