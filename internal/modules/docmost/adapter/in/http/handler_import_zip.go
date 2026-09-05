@@ -191,7 +191,7 @@ func (handler *Handler) processGenericZip(c *gin.Context, data []byte, spaceID, 
 
 func isSupportedZipDocumentExtension(extension string) bool {
 	switch strings.ToLower(extension) {
-	case ".md", ".html", ".docx", ".pdf":
+	case ".md", ".html", ".docx", ".pdf", ".csv":
 		return true
 	default:
 		return false

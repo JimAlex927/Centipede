@@ -66,12 +66,22 @@ func TestZipImportSources(t *testing.T) {
 }
 
 func TestSupportedZipDocumentExtensions(t *testing.T) {
-	for _, extension := range []string{".md", ".html", ".docx", ".pdf", ".DOCX"} {
+	for _, extension := range []string{".md", ".html", ".docx", ".pdf", ".csv", ".DOCX"} {
 		if !isSupportedZipDocumentExtension(extension) {
 			t.Fatalf("supported document extension rejected: %q", extension)
 		}
 	}
-	if isSupportedZipDocumentExtension(".csv") || isSupportedZipDocumentExtension(".png") {
+	if isSupportedZipDocumentExtension(".png") {
 		t.Fatal("non-document ZIP entry unexpectedly treated as a page")
+	}
+}
+
+func TestCSVImport(t *testing.T) {
+	nodes, err := parseCSV(strings.NewReader("Name,Role\nAlice,Writer\nBob,Reader\n"))
+	if err != nil || len(nodes) != 1 || nodes[0].Type != "table" || len(nodes[0].Content) != 3 {
+		t.Fatalf("unexpected CSV nodes: %#v, %v", nodes, err)
+	}
+	if nodes[0].Content[0].Content[0].Type != "tableHeader" || importPlainText(nodes[0].Content[1].Content[0].Content) != "Alice" {
+		t.Fatalf("CSV table structure was not preserved: %#v", nodes[0])
 	}
 }

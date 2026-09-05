@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
@@ -111,6 +112,9 @@ func parseImportedDocumentWithOCR(reader io.Reader, extension string, ocrConfig 
 	if extension == ".docx" {
 		return parseDocx(reader)
 	}
+	if extension == ".csv" {
+		return parseCSV(reader)
+	}
 	if extension == ".pdf" {
 		return parsePDFWithOCR(reader, ocrConfig)
 	}
@@ -119,6 +123,50 @@ func parseImportedDocumentWithOCR(reader io.Reader, extension string, ocrConfig 
 		return nil, err
 	}
 	return parseHTMLRoot(document), nil
+}
+
+func parseCSV(reader io.Reader) ([]importNode, error) {
+	parser := csv.NewReader(io.LimitReader(reader, singlePageImportLimit+1))
+	parser.FieldsPerRecord = -1
+	parser.ReuseRecord = false
+	rows := make([][]string, 0, 64)
+	for len(rows) < 10000 {
+		row, err := parser.Read()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		if len(row) > 1000 {
+			return nil, errors.New("CSV contains too many columns")
+		}
+		for _, value := range row {
+			if len(value) > 1<<20 {
+				return nil, errors.New("CSV field is too large")
+			}
+		}
+		rows = append(rows, row)
+	}
+	if len(rows) == 10000 {
+		return nil, errors.New("CSV contains too many rows")
+	}
+	if len(rows) == 0 {
+		return ensureImportContent(nil), nil
+	}
+	result := importNode{Type: "table", Content: make([]importNode, 0, len(rows))}
+	for rowIndex, row := range rows {
+		cells := make([]importNode, 0, len(row))
+		for _, value := range row {
+			cellType := "tableCell"
+			if rowIndex == 0 {
+				cellType = "tableHeader"
+			}
+			cells = append(cells, importNode{Type: cellType, Content: []importNode{{Type: "paragraph", Content: markdownInline(value)}}})
+		}
+		result.Content = append(result.Content, importNode{Type: "tableRow", Content: cells})
+	}
+	return []importNode{result}, nil
 }
 
 func parsePDF(reader io.Reader) ([]importNode, error) {
