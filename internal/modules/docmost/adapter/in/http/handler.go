@@ -578,7 +578,15 @@ func (handler *Handler) pageInfo(c *gin.Context) {
 		return
 	}
 	current := currentPrincipal(c)
-	page, err := handler.repository.PageByID(c.Request.Context(), request.PageID, request.SlugID, current.Workspace.ID, false)
+	lookup := request.PageID
+	if lookup == "" {
+		lookup = request.SlugID
+	}
+	// Docmost's client sends the URL token as pageId, even though the
+	// token is normally pages.slug_id rather than the UUID primary key.
+	// Passing it through both lookup slots keeps refresh/deep-link loads
+	// compatible with both the UUID and slug-id forms.
+	page, err := handler.repository.PageByID(c.Request.Context(), lookup, lookup, current.Workspace.ID, false)
 	if err != nil {
 		handler.writeRepositoryError(c, err, "Page not found")
 		return
