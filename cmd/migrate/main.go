@@ -18,6 +18,7 @@ import (
 // eg: postgres://allmacht:7777777@192.168.154.128:5433
 func main() {
 	directory := flag.String("dir", "migrations", "directory containing SQL migrations")
+	adoptExisting := flag.Bool("adopt-existing", false, "adopt an already migrated Docmost database without executing the baseline SQL")
 	flag.Parse()
 
 	cleanup, err := logger.Init(logger.WithLevel("info"), logger.WithFileEnable(false))
@@ -40,8 +41,14 @@ func main() {
 	}
 	defer pool.Close()
 
-	if err := migrations.Run(ctx, pool, *directory); err != nil {
-		logger.Error("run migrations", zap.Error(err))
+	var migrationErr error
+	if *adoptExisting {
+		migrationErr = migrations.AdoptExisting(ctx, pool, *directory, "000001_docmost_baseline.sql")
+	} else {
+		migrationErr = migrations.Run(ctx, pool, *directory)
+	}
+	if migrationErr != nil {
+		logger.Error("run migrations", zap.Error(migrationErr))
 		os.Exit(1)
 	}
 	logger.Info("database migrations applied")

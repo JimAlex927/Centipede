@@ -5,8 +5,9 @@ This schema-only baseline was generated from the Docmost source migrations throu
 credentials, or Kysely migration bookkeeping. Requires PostgreSQL 17+ with the
 bundled `unaccent` and `pg_trgm` extensions available.
 
-Use **only on an empty database**. Existing Docmost installations need a separately
-verified upgrade/adoption path; do not apply this baseline to an existing schema.
+Use **only on an empty database**. Existing Docmost installations must not execute
+the baseline SQL directly. If the existing database has already been migrated to
+the same Docmost schema, use the explicit adoption check instead.
 The directory is separate from Centipede's own application migrations deliberately.
 
 After selecting the intended database in an isolated configuration:
@@ -15,6 +16,17 @@ After selecting the intended database in an isolated configuration:
 go run ./cmd/migrate -dir migrations/docmost
 go run ./cmd/api
 ```
+
+For an existing installation, first take a database backup and then run:
+
+```powershell
+go run ./cmd/migrate -dir migrations/docmost -adopt-existing
+```
+
+The adoption command validates the core Docmost tables and columns, then only
+records the baseline in `schema_migrations`; it does not run `CREATE`, `ALTER`,
+or data-changing SQL. An older or incomplete schema is rejected and must be
+upgraded separately before starting Go.
 
 The Go migration runner records the baseline and skips it on subsequent runs.
 No Node runtime is needed to apply it. The source-side `go-test-migrate.ts` script
