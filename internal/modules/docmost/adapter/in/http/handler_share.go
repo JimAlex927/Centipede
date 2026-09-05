@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 
+	"centipede/internal/modules/docmost/adapter/out/postgres"
 	"centipede/internal/modules/docmost/domain"
 
 	"github.com/gin-gonic/gin"
@@ -149,6 +150,14 @@ func (handler *Handler) shareForPage(c *gin.Context) {
 	}
 	share, err := handler.repository.ShareForPage(c.Request.Context(), page.ID, current.Workspace.ID)
 	if err != nil {
+		// The Node API treats an existing page without a share as a successful
+		// lookup with an empty result. The page was already loaded above, so an
+		// ErrNotFound here means only that no share exists for this page (or an
+		// eligible shared ancestor), not that the page itself is missing.
+		if errors.Is(err, postgres.ErrNotFound) {
+			writeData(c, http.StatusOK, nil)
+			return
+		}
 		handler.writeRepositoryError(c, err, "Share not found")
 		return
 	}
