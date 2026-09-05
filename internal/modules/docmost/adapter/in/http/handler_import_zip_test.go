@@ -3,6 +3,7 @@ package http
 import (
 	"archive/zip"
 	"bytes"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -131,6 +132,20 @@ func TestSupportedZipDocumentExtensions(t *testing.T) {
 	}
 }
 
+func TestFilterConfluencePageEntriesRemovesRootIndex(t *testing.T) {
+	entries := filterConfluencePageEntries([]zipImportEntry{
+		{Path: "index.html"},
+		{Path: "pages/12345/Project.html"},
+	})
+	if len(entries) != 1 || entries[0].Path != "pages/12345/Project.html" {
+		t.Fatalf("Confluence root index was not removed: %#v", entries)
+	}
+	entries = filterConfluencePageEntries([]zipImportEntry{{Path: "index.html"}})
+	if len(entries) != 1 {
+		t.Fatal("single-page archive should retain its only document")
+	}
+}
+
 func TestConfluenceDrawioPair(t *testing.T) {
 	assets := map[string]*zip.File{
 		"attachments/diagram.drawio": {},
@@ -198,6 +213,28 @@ func TestResolveConfluenceAssetPathSupportsNumericAliases(t *testing.T) {
 		if got := resolveConfluenceAssetPath(input, assets); got != want {
 			t.Fatalf("resolveConfluenceAssetPath(%q) = %q, want %q", input, got, want)
 		}
+	}
+}
+
+func TestConfluencePageAttachmentPaths(t *testing.T) {
+	assets := map[string]*zip.File{
+		"attachments/12345/manual.pdf":     {},
+		"attachments/12345/diagram.drawio": {},
+		"attachments/12345/diagram.png":    {},
+		"attachments/99999/other.pdf":      {},
+		"images/logo.png":                  {},
+	}
+	got := confluencePageAttachmentPaths("pages/12345/Project%20plan.html", assets)
+	want := []string{
+		"attachments/12345/diagram.drawio",
+		"attachments/12345/diagram.png",
+		"attachments/12345/manual.pdf",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected page attachment paths: %#v", got)
+	}
+	if got := confluencePageIDs("index.html"); len(got) != 0 {
+		t.Fatalf("index page unexpectedly had Confluence page IDs: %#v", got)
 	}
 }
 

@@ -231,13 +231,25 @@ func (handler *Handler) processGenericZip(ctx context.Context, data []byte, spac
 		return err
 	}
 	delete(assets, "docmost-metadata.json")
+	if source == "confluence" {
+		entries = filterConfluencePageEntries(entries)
+	}
+	if len(entries) == 0 {
+		return errors.New("ZIP contains no supported document pages")
+	}
 	sort.Slice(entries, func(left, right int) bool {
 		return zipPathDepth(entries[left].Path) < zipPathDepth(entries[right].Path) || (zipPathDepth(entries[left].Path) == zipPathDepth(entries[right].Path) && entries[left].Path < entries[right].Path)
 	})
 	directoriesList := make([]string, 0, len(directories))
-	for directory := range directories {
-		if directory != "." && directory != "" {
-			directoriesList = append(directoriesList, directory)
+	// Confluence's `pages/<numeric-id>/...` directories are export
+	// implementation details, not page folders. Creating them as pages would
+	// leave users with synthetic "pages" and numeric-ID pages above every real
+	// document, so Confluence pages are imported as top-level pages here.
+	if source != "confluence" {
+		for directory := range directories {
+			if directory != "." && directory != "" {
+				directoriesList = append(directoriesList, directory)
+			}
 		}
 	}
 	sort.Slice(directoriesList, func(left, right int) bool {
@@ -333,7 +345,8 @@ func (handler *Handler) processGenericZip(ctx context.Context, data []byte, spac
 		if pageID == "" {
 			return errors.New("imported page was not allocated")
 		}
-		if err := handler.importZipAttachments(ctx, pageID, spaceID, entry.Path, source, nodes, assets, current); err != nil {
+		nodes, err = handler.importZipAttachments(ctx, pageID, spaceID, entry.Path, source, nodes, assets, current)
+		if err != nil {
 			return err
 		}
 		fallbackTitle := zipImportTitle(strings.TrimSuffix(pathpkg.Base(entry.Path), filepath.Ext(entry.Path)), source)
@@ -356,6 +369,24 @@ func isSupportedZipDocumentExtension(extension string) bool {
 	default:
 		return false
 	}
+}
+
+func filterConfluencePageEntries(entries []zipImportEntry) []zipImportEntry {
+	if len(entries) <= 1 {
+		return entries
+	}
+	filtered := make([]zipImportEntry, 0, len(entries))
+	for _, entry := range entries {
+		base := strings.ToLower(pathpkg.Base(entry.Path))
+		if (base == "index.html" || base == "index.htm") && pathpkg.Dir(entry.Path) == "." {
+			// The root index is the export navigation page. Importing it as a
+			// document creates a useless duplicate page and its links are only
+			// navigation chrome, not page content.
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	return filtered
 }
 
 func readZipImportMetadata(file *zip.File) (*zipImportMetadata, error) {
@@ -448,9 +479,9 @@ func zipInternalLinkTarget(currentPath, href string, pageByPath map[string]strin
 	return "", "", false
 }
 
-func (handler *Handler) importZipAttachments(ctx context.Context, pageID, spaceID, pagePath, source string, nodes []importNode, assets map[string]*zip.File, current principal) error {
+func (handler *Handler) importZipAttachments(ctx context.Context, pageID, spaceID, pagePath, source string, nodes []importNode, assets map[string]*zip.File, current principal) ([]importNode, error) {
 	if handler.storage == nil || len(assets) == 0 {
-		return nil
+		return nodes, nil
 	}
 	imported := make(map[string]string)
 	drawioRendered := make(map[string]string)
@@ -516,7 +547,129 @@ func (handler *Handler) importZipAttachments(ctx context.Context, pageID, spaceI
 		}
 		return nil
 	}
-	return walk(nodes)
+	if err := walk(nodes); err != nil {
+		return nil, err
+	}
+	if source == "confluence" {
+		var appendErr error
+		nodes, appendErr = appendConfluenceUnreferencedAttachments(ctx, handler, pageID, spaceID, pagePath, nodes, assets, imported, drawioRendered, current)
+		if appendErr != nil {
+			return nil, appendErr
+		}
+	}
+	return nodes, nil
+}
+
+// appendConfluenceUnreferencedAttachments preserves files listed in a
+// Confluence page's attachment directory even when the exported HTML does not
+// contain a link to them. The Node importer adds these as attachment nodes as
+// well, which is important for diagrams and files that users expect to find in
+// the page's attachment panel after migration.
+func appendConfluenceUnreferencedAttachments(ctx context.Context, handler *Handler, pageID, spaceID, pagePath string, nodes []importNode, assets map[string]*zip.File, imported, drawioRendered map[string]string, current principal) ([]importNode, error) {
+	attachmentPaths := confluencePageAttachmentPaths(pagePath, assets)
+	if len(attachmentPaths) == 0 {
+		return nodes, nil
+	}
+
+	for _, resourcePath := range attachmentPaths {
+		if _, ok := imported[resourcePath]; ok {
+			continue
+		}
+		if _, ok := drawioRendered[resourcePath]; ok {
+			continue
+		}
+
+		drawioPath, pngPath, isDrawio := confluenceDrawioPair(resourcePath, assets)
+		if isDrawio {
+			attachmentID := drawioRendered[drawioPath]
+			if attachmentID == "" {
+				var err error
+				attachmentID, err = handler.createImportedDrawioAttachment(ctx, pageID, spaceID, drawioPath, pngPath, assets, current)
+				if err != nil {
+					return nil, err
+				}
+				drawioRendered[drawioPath] = attachmentID
+				if pngPath != "" {
+					drawioRendered[pngPath] = attachmentID
+				}
+			}
+			fileName := "diagram.drawio.svg"
+			src := "/api/files/" + url.PathEscape(attachmentID) + "/" + url.PathEscape(fileName)
+			nodes = append(nodes, importNode{Type: "drawio", Attrs: map[string]any{
+				"src": src, "url": src, "title": fileName, "attachmentId": attachmentID,
+			}})
+			continue
+		}
+
+		file := assets[resourcePath]
+		if file == nil {
+			continue
+		}
+		attachmentID, err := handler.createImportedAttachmentNamed(ctx, pageID, spaceID, resourcePath, file, current, pathpkg.Base(resourcePath))
+		if err != nil {
+			return nil, err
+		}
+		imported[resourcePath] = attachmentID
+		fileName := safeExportFileName(pathpkg.Base(resourcePath))
+		src := "/api/files/" + url.PathEscape(attachmentID) + "/" + url.PathEscape(fileName)
+		mimeType := mime.TypeByExtension(filepath.Ext(fileName))
+		if mimeType == "" {
+			mimeType = "application/octet-stream"
+		}
+		nodes = append(nodes, importNode{Type: "attachment", Attrs: map[string]any{
+			"url": src, "name": fileName, "mime": mimeType, "size": int64(file.UncompressedSize64), "attachmentId": attachmentID,
+		}})
+	}
+	return nodes, nil
+}
+
+func confluencePageAttachmentPaths(pagePath string, assets map[string]*zip.File) []string {
+	pageIDs := confluencePageIDs(pagePath)
+	if len(pageIDs) == 0 {
+		return nil
+	}
+	allowed := make(map[string]struct{})
+	for _, pageID := range pageIDs {
+		prefix := "attachments/" + pageID + "/"
+		for path := range assets {
+			if strings.HasPrefix(path, prefix) && pathpkg.Base(path) != "" {
+				allowed[path] = struct{}{}
+			}
+		}
+	}
+	paths := make([]string, 0, len(allowed))
+	for path := range allowed {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+func confluencePageIDs(pagePath string) []string {
+	parts := strings.Split(strings.Trim(pagePath, "/"), "/")
+	seen := make(map[string]struct{})
+	result := make([]string, 0, 2)
+	for index, part := range parts {
+		if index > 0 && (strings.EqualFold(parts[index-1], "pages") || strings.EqualFold(parts[index-1], "page")) && isDecimalString(part) {
+			if _, ok := seen[part]; !ok {
+				seen[part] = struct{}{}
+				result = append(result, part)
+			}
+		}
+	}
+	return result
+}
+
+func isDecimalString(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, character := range value {
+		if character < '0' || character > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func (handler *Handler) createImportedAttachment(ctx context.Context, pageID, spaceID, resourcePath string, file *zip.File, current principal) (string, error) {
