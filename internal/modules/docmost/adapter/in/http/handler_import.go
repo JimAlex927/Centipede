@@ -1,7 +1,10 @@
 package http
 
 import (
+	"archive/zip"
+	"bytes"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"io"
 	"net/http"
@@ -52,9 +55,9 @@ func (handler *Handler) importPage(c *gin.Context) {
 		return
 	}
 	extension := strings.ToLower(filepath.Ext(file.Filename))
-	if extension != ".md" && extension != ".html" {
-		if extension == ".docx" || extension == ".pdf" {
-			writeError(c, http.StatusNotImplemented, "DOCX and PDF import is not implemented in Go yet")
+	if extension != ".md" && extension != ".html" && extension != ".docx" {
+		if extension == ".pdf" {
+			writeError(c, http.StatusNotImplemented, "PDF import is not implemented in Go yet")
 		} else {
 			writeError(c, http.StatusBadRequest, "Invalid import file type.")
 		}
@@ -91,11 +94,240 @@ func parseImportedDocument(reader io.Reader, extension string) ([]importNode, er
 	if extension == ".md" {
 		return parseMarkdown(reader)
 	}
+	if extension == ".docx" {
+		return parseDocx(reader)
+	}
 	document, err := htmlnode.Parse(reader)
 	if err != nil {
 		return nil, err
 	}
 	return parseHTMLRoot(document), nil
+}
+
+type docxImportParagraph struct {
+	node    importNode
+	isList  bool
+	ordered bool
+	numID   string
+}
+
+func parseDocx(reader io.Reader) ([]importNode, error) {
+	data, err := io.ReadAll(io.LimitReader(reader, singlePageImportLimit+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > singlePageImportLimit {
+		return nil, errors.New("import file is too large")
+	}
+	archive, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return nil, err
+	}
+	var documentFile *zip.File
+	for _, file := range archive.File {
+		if file.Name == "word/document.xml" {
+			documentFile = file
+			break
+		}
+	}
+	if documentFile == nil {
+		return nil, errors.New("word/document.xml is missing")
+	}
+	orderedNumbering, err := readDocxNumbering(archive)
+	if err != nil {
+		return nil, err
+	}
+	opened, err := documentFile.Open()
+	if err != nil {
+		return nil, err
+	}
+	defer opened.Close()
+
+	decoder := xml.NewDecoder(io.LimitReader(opened, singlePageImportLimit+1))
+	paragraphs := make([]docxImportParagraph, 0)
+	for {
+		token, tokenErr := decoder.Token()
+		if tokenErr == io.EOF {
+			break
+		}
+		if tokenErr != nil {
+			return nil, tokenErr
+		}
+		start, ok := token.(xml.StartElement)
+		if ok && start.Name.Local == "p" {
+			paragraph, parseErr := parseDocxParagraph(decoder, start)
+			if parseErr != nil {
+				return nil, parseErr
+			}
+			paragraphs = append(paragraphs, paragraph)
+		}
+	}
+
+	result := make([]importNode, 0, len(paragraphs))
+	for index := range paragraphs {
+		paragraphs[index].ordered = paragraphs[index].isList && orderedNumbering[paragraphs[index].numID]
+	}
+	for index := 0; index < len(paragraphs); {
+		paragraph := paragraphs[index]
+		if !paragraph.isList {
+			result = append(result, paragraph.node)
+			index++
+			continue
+		}
+		list := importNode{Type: "bulletList", Content: make([]importNode, 0)}
+		if paragraph.ordered {
+			list.Type = "orderedList"
+		}
+		for index < len(paragraphs) && paragraphs[index].isList && paragraphs[index].ordered == paragraph.ordered {
+			list.Content = append(list.Content, importNode{Type: "listItem", Content: []importNode{paragraphs[index].node}})
+			index++
+		}
+		result = append(result, list)
+	}
+	return ensureImportContent(result), nil
+}
+
+func parseDocxParagraph(decoder *xml.Decoder, start xml.StartElement) (docxImportParagraph, error) {
+	paragraph := docxImportParagraph{node: importNode{Type: "paragraph"}}
+	var marks []importMark
+	depth := 1
+	for depth > 0 {
+		token, err := decoder.Token()
+		if err != nil {
+			return paragraph, err
+		}
+		switch value := token.(type) {
+		case xml.StartElement:
+			depth++
+			switch value.Name.Local {
+			case "pStyle":
+				style := docxAttribute(value, "val")
+				if level := docxHeadingLevel(style); level > 0 {
+					paragraph.node.Type = "heading"
+					paragraph.node.Attrs = map[string]any{"level": level}
+				} else if style == "Title" {
+					paragraph.node.Type = "heading"
+					paragraph.node.Attrs = map[string]any{"level": 1}
+				}
+			case "numPr":
+				paragraph.isList = true
+			case "numId":
+				paragraph.numID = docxAttribute(value, "val")
+			case "t":
+				var text string
+				if err := decoder.DecodeElement(&text, &value); err != nil {
+					return paragraph, err
+				}
+				paragraph.node.Content = append(paragraph.node.Content, importNode{Type: "text", Text: text, Marks: append([]importMark(nil), marks...)})
+				depth--
+			case "b":
+				marks = append(marks, importMark{Type: "bold"})
+			case "i":
+				marks = append(marks, importMark{Type: "italic"})
+			case "strike":
+				marks = append(marks, importMark{Type: "strike"})
+			case "u":
+				marks = append(marks, importMark{Type: "underline"})
+			case "br":
+				paragraph.node.Content = append(paragraph.node.Content, importNode{Type: "hardBreak"})
+			case "ilvl":
+				// Keep the current flat list shape; nested list indentation is
+				// intentionally normalized during import.
+			}
+		case xml.EndElement:
+			depth--
+			if value.Name.Local == "r" {
+				marks = nil
+			}
+		}
+	}
+	paragraph.node.Content = ensureImportInlineContent(paragraph.node.Content)
+	return paragraph, nil
+}
+
+func readDocxNumbering(archive *zip.Reader) (map[string]bool, error) {
+	result := make(map[string]bool)
+	var numberingFile *zip.File
+	for _, file := range archive.File {
+		if file.Name == "word/numbering.xml" {
+			numberingFile = file
+			break
+		}
+	}
+	if numberingFile == nil {
+		return result, nil
+	}
+	opened, err := numberingFile.Open()
+	if err != nil {
+		return nil, err
+	}
+	defer opened.Close()
+	decoder := xml.NewDecoder(io.LimitReader(opened, singlePageImportLimit+1))
+	abstractDecimal := make(map[string]bool)
+	currentAbstract := ""
+	currentNum := ""
+	for {
+		token, tokenErr := decoder.Token()
+		if tokenErr == io.EOF {
+			break
+		}
+		if tokenErr != nil {
+			return nil, tokenErr
+		}
+		switch value := token.(type) {
+		case xml.StartElement:
+			switch value.Name.Local {
+			case "abstractNum":
+				currentAbstract = docxAttribute(value, "abstractNumId")
+			case "num":
+				currentNum = docxAttribute(value, "numId")
+			case "numFmt":
+				if currentAbstract != "" {
+					abstractDecimal[currentAbstract] = docxAttribute(value, "val") == "decimal"
+				}
+			case "abstractNumId":
+				if currentNum != "" {
+					abstractID := docxAttribute(value, "val")
+					result[currentNum] = abstractDecimal[abstractID]
+				}
+			}
+		case xml.EndElement:
+			switch value.Name.Local {
+			case "abstractNum":
+				currentAbstract = ""
+			case "num":
+				currentNum = ""
+			}
+		}
+	}
+	return result, nil
+}
+
+func docxHeadingLevel(style string) int {
+	if !strings.HasPrefix(style, "Heading") {
+		return 0
+	}
+	level, err := strconv.Atoi(strings.TrimPrefix(style, "Heading"))
+	if err != nil || level < 1 || level > 6 {
+		return 0
+	}
+	return level
+}
+
+func docxAttribute(element xml.StartElement, key string) string {
+	for _, attr := range element.Attr {
+		if attr.Name.Local == key {
+			return attr.Value
+		}
+	}
+	return ""
+}
+
+func ensureImportInlineContent(nodes []importNode) []importNode {
+	if len(nodes) == 0 {
+		return []importNode{{Type: "text", Text: ""}}
+	}
+	return nodes
 }
 
 func parseMarkdown(reader io.Reader) ([]importNode, error) {

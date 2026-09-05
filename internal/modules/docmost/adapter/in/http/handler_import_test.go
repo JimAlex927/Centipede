@@ -4,6 +4,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"centipede/internal/modules/docmost/domain"
 )
 
 func TestParseMarkdownImport(t *testing.T) {
@@ -39,5 +41,23 @@ func TestParseHTMLImport(t *testing.T) {
 	want := []importMark{{Type: "bold"}}
 	if !reflect.DeepEqual(nodes[0].Content[1].Marks, want) {
 		t.Fatalf("unexpected html marks: %#v", nodes[0].Content[1].Marks)
+	}
+}
+
+func TestParseDocxImport(t *testing.T) {
+	title := "DOCX title"
+	data, err := buildDocx(domain.Page{Title: &title, Content: []byte(`{"type":"doc","content":[{"type":"heading","attrs":{"level":2},"content":[{"type":"text","text":"Section"}]},{"type":"paragraph","content":[{"type":"text","text":"Hello ","marks":[{"type":"bold"}]},{"type":"text","text":"world"}]}]}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes, err := parseImportedDocument(strings.NewReader(string(data)), ".docx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 3 || nodes[0].Type != "heading" || importPlainText(nodes[0].Content) != "DOCX title" || nodes[1].Type != "heading" || nodes[2].Type != "paragraph" {
+		t.Fatalf("unexpected docx nodes: %#v", nodes)
+	}
+	if len(nodes[2].Content) != 2 || len(nodes[2].Content[0].Marks) != 1 || nodes[2].Content[0].Marks[0].Type != "bold" {
+		t.Fatalf("docx marks were not preserved: %#v", nodes[2].Content)
 	}
 }
