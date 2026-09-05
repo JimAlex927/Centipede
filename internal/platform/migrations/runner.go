@@ -64,6 +64,90 @@ func Run(ctx context.Context, pool *pgxpool.Pool, directory string) error {
 	return nil
 }
 
+// UpgradeExisting brings an already populated Docmost database up to the
+// schema required by the Go service. It deliberately skips the fresh-database
+// baseline: executing that file against an existing installation would fail
+// on duplicate tables and is not an upgrade operation.
+//
+// The compatibility files are additive and idempotent. Each file is recorded
+// only after its transaction commits, so an interrupted upgrade can be safely
+// retried. The baseline is recorded only after the final read-only validation
+// succeeds.
+func UpgradeExisting(ctx context.Context, pool *pgxpool.Pool, directory, baselineVersion string) error {
+	if strings.TrimSpace(baselineVersion) == "" {
+		return fmt.Errorf("migration baseline version is required")
+	}
+	for _, filename := range []string{"000002_docmost_compatibility.sql", "000003_docmost_late_tables.sql"} {
+		if _, err := os.Stat(filepath.Join(directory, filename)); err != nil {
+			return fmt.Errorf("read compatibility migration %s: %w", filename, err)
+		}
+	}
+	if err := ensureExistingDocmostCore(ctx, pool); err != nil {
+		return err
+	}
+	if _, err := pool.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS schema_migrations (
+			version TEXT PRIMARY KEY,
+			applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+		)
+	`); err != nil {
+		return fmt.Errorf("create schema_migrations: %w", err)
+	}
+
+	for _, filename := range []string{"000002_docmost_compatibility.sql", "000003_docmost_late_tables.sql"} {
+		var applied bool
+		if err := pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = $1)`, filename).Scan(&applied); err != nil {
+			return err
+		}
+		if applied {
+			continue
+		}
+		contents, err := os.ReadFile(filepath.Join(directory, filename))
+		if err != nil {
+			return fmt.Errorf("read %s: %w", filename, err)
+		}
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			return fmt.Errorf("begin %s: %w", filename, err)
+		}
+		if _, err := tx.Exec(ctx, string(contents)); err != nil {
+			_ = tx.Rollback(ctx)
+			return fmt.Errorf("apply %s: %w", filename, err)
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO schema_migrations (version) VALUES ($1)`, filename); err != nil {
+			_ = tx.Rollback(ctx)
+			return fmt.Errorf("record %s: %w", filename, err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("commit %s: %w", filename, err)
+		}
+	}
+
+	if err := ValidateExisting(ctx, pool); err != nil {
+		return fmt.Errorf("validate upgraded Docmost schema: %w", err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO schema_migrations (version) VALUES ($1) ON CONFLICT (version) DO NOTHING`, baselineVersion); err != nil {
+		return fmt.Errorf("record adopted baseline: %w", err)
+	}
+	return nil
+}
+
+func ensureExistingDocmostCore(ctx context.Context, pool *pgxpool.Pool) error {
+	for _, table := range []string{"workspaces", "users", "groups", "spaces", "pages", "attachments"} {
+		var exists bool
+		if err := pool.QueryRow(ctx, `SELECT EXISTS(
+			SELECT 1 FROM information_schema.tables
+			WHERE table_schema = 'public' AND table_name = $1
+		)`, table).Scan(&exists); err != nil {
+			return fmt.Errorf("check Docmost core table %s: %w", table, err)
+		}
+		if !exists {
+			return fmt.Errorf("existing database is not a Docmost installation: missing core table %s", table)
+		}
+	}
+	return nil
+}
+
 // AdoptExisting records a Docmost baseline for a database that was already
 // migrated by Docmost. It deliberately never executes the baseline SQL: the
 // baseline contains CREATE statements and is only safe for an empty database.

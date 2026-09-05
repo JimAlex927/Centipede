@@ -20,6 +20,7 @@ func main() {
 	directory := flag.String("dir", "migrations", "directory containing SQL migrations")
 	adoptExisting := flag.Bool("adopt-existing", false, "adopt an already migrated Docmost database without executing the baseline SQL")
 	checkExisting := flag.Bool("check-existing", false, "validate an existing Docmost database without changing it")
+	upgradeExisting := flag.Bool("upgrade-existing", false, "apply additive Docmost compatibility migrations to an existing database, then validate and adopt the baseline")
 	flag.Parse()
 
 	cleanup, err := logger.Init(logger.WithLevel("info"), logger.WithFileEnable(false))
@@ -27,8 +28,18 @@ func main() {
 		panic(err)
 	}
 	defer cleanup()
-	if *adoptExisting && *checkExisting {
-		logger.Error("-adopt-existing and -check-existing cannot be used together")
+	selectedModes := 0
+	if *adoptExisting {
+		selectedModes++
+	}
+	if *checkExisting {
+		selectedModes++
+	}
+	if *upgradeExisting {
+		selectedModes++
+	}
+	if selectedModes > 1 {
+		logger.Error("-adopt-existing, -check-existing, and -upgrade-existing are mutually exclusive")
 		os.Exit(2)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -49,6 +60,8 @@ func main() {
 	var migrationErr error
 	if *checkExisting {
 		migrationErr = migrations.ValidateExisting(ctx, pool)
+	} else if *upgradeExisting {
+		migrationErr = migrations.UpgradeExisting(ctx, pool, *directory, "000001_docmost_baseline.sql")
 	} else if *adoptExisting {
 		migrationErr = migrations.AdoptExisting(ctx, pool, *directory, "000001_docmost_baseline.sql")
 	} else {

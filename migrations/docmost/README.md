@@ -35,7 +35,15 @@ The adoption command validates the core Docmost tables, columns, extensions,
 functions and page-search trigger, then only records the baseline in
 `schema_migrations`; it does not run `CREATE`, `ALTER`, or data-changing SQL.
 An older or incomplete schema is rejected and must be upgraded separately
-before starting Go.
+before starting Go. For an older but recognized Docmost installation, use the
+additive upgrade path instead:
+
+```powershell
+go run ./cmd/migrate -dir migrations/docmost -upgrade-existing
+```
+
+This skips the fresh-database baseline, applies only the compatibility files,
+validates the resulting schema, and records the baseline after validation.
 
 The Go migration runner records the baseline and applies the additive
 `000002_docmost_compatibility.sql` and the follow-up
