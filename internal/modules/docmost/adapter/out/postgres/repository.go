@@ -514,9 +514,9 @@ func (repository *Repository) CreatePage(ctx context.Context, workspaceID, userI
 		return domain.Page{}, errors.New("spaceId is required")
 	}
 	_, err = repository.db.Exec(ctx, `
-INSERT INTO pages (id, slug_id, title, icon, cover_photo, position, content, parent_page_id, creator_id, last_updated_by_id, space_id, workspace_id)
-VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $9, $10, $11)`,
-		id, slugID, title, input.Icon, input.CoverPhoto, position, content, input.ParentPageID, userID, *input.SpaceID, workspaceID)
+INSERT INTO pages (id, slug_id, title, icon, cover_photo, position, content, text_content, parent_page_id, creator_id, last_updated_by_id, space_id, workspace_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $10, $11, $12)`,
+		id, slugID, title, input.Icon, input.CoverPhoto, position, content, jsonTextContent(content), input.ParentPageID, userID, *input.SpaceID, workspaceID)
 	if err != nil {
 		return domain.Page{}, err
 	}
@@ -687,6 +687,40 @@ func nullableJSON(value json.RawMessage) any {
 		return nil
 	}
 	return value
+}
+
+func jsonTextContent(raw json.RawMessage) string {
+	var value any
+	if len(raw) == 0 || json.Unmarshal(raw, &value) != nil {
+		return ""
+	}
+	var result strings.Builder
+	var walk func(any)
+	walk = func(current any) {
+		switch node := current.(type) {
+		case map[string]any:
+			if nodeType, _ := node["type"].(string); nodeType == "text" {
+				if text, ok := node["text"].(string); ok {
+					result.WriteString(text)
+				}
+				return
+			}
+			if nodeType, _ := node["type"].(string); nodeType == "hardBreak" || nodeType == "paragraph" || nodeType == "heading" {
+				result.WriteByte('\n')
+			}
+			if children, ok := node["content"].([]any); ok {
+				for _, child := range children {
+					walk(child)
+				}
+			}
+		case []any:
+			for _, child := range node {
+				walk(child)
+			}
+		}
+	}
+	walk(value)
+	return strings.TrimSpace(result.String())
 }
 
 func slugify(value string) string {
