@@ -535,6 +535,7 @@ func (handler *Handler) updateWorkspace(c *gin.Context) {
 		DisablePublicSharing *bool           `json:"disablePublicSharing"`
 		RestrictAPIAdmins    *bool           `json:"restrictApiToAdmins"`
 		AllowMemberTemplates *bool           `json:"allowMemberTemplates"`
+		TrashRetentionDays   *int            `json:"trashRetentionDays"`
 		DefaultPageEditMode  *string         `json:"defaultPageEditMode"`
 	}
 	if !decode(c, &request) {
@@ -565,7 +566,26 @@ func (handler *Handler) updateWorkspace(c *gin.Context) {
 	if request.MCPEnabled != nil && *request.MCPEnabled && !handler.requireFeature(c, "mcp") {
 		return
 	}
-	if (request.EnforceMCPOAuth != nil && *request.EnforceMCPOAuth || request.AIChatReadOnly != nil && *request.AIChatReadOnly || request.AIWorkspaceOnly != nil && *request.AIWorkspaceOnly) && !handler.requireFeature(c, "ai:controls") {
+	if request.EnforceMCPOAuth != nil && !handler.requireFeature(c, "mcp:controls") {
+		return
+	}
+	if (request.AIChatReadOnly != nil || request.AIWorkspaceOnly != nil) && !handler.requireFeature(c, "ai:controls") {
+		return
+	}
+	if request.DisablePublicSharing != nil && !handler.requireFeature(c, "security:settings") {
+		return
+	}
+	if request.RestrictAPIAdmins != nil && !handler.requireFeature(c, "security:settings") {
+		return
+	}
+	if request.AllowMemberTemplates != nil && !handler.requireFeature(c, "security:settings") {
+		return
+	}
+	if request.TrashRetentionDays != nil && !handler.requireFeature(c, "security:settings") {
+		return
+	}
+	if request.TrashRetentionDays != nil && *request.TrashRetentionDays < 1 {
+		writeError(c, http.StatusBadRequest, "Trash retention must be at least 1 day")
 		return
 	}
 	settings = setWorkspaceSetting(settings, request.GenerativeAI, "ai", "generative")
@@ -583,10 +603,17 @@ func (handler *Handler) updateWorkspace(c *gin.Context) {
 	workspace, err := handler.repository.UpdateWorkspace(c.Request.Context(), current.Workspace.ID, postgres.WorkspaceUpdate{
 		Name: request.Name, Description: request.Description, Logo: request.Logo,
 		Hostname: request.Hostname, Settings: settings, EnforceMFA: request.EnforceMFA, IsSCIMEnabled: request.IsSCIMEnabled, EnforceSSO: request.EnforceSSO,
+		TrashRetentionDays: request.TrashRetentionDays,
 	})
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, "Failed to update workspace")
 		return
+	}
+	if request.DisablePublicSharing != nil && *request.DisablePublicSharing {
+		if err := handler.repository.DeleteSharesByWorkspace(c.Request.Context(), current.Workspace.ID); err != nil {
+			writeError(c, http.StatusInternalServerError, "Failed to disable public sharing")
+			return
+		}
 	}
 	writeData(c, http.StatusOK, workspace)
 }

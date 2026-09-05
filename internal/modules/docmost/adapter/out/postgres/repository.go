@@ -259,14 +259,15 @@ WHERE id = $1 AND workspace_id = $2`, userID, workspaceID, input.Name, input.Loc
 }
 
 type WorkspaceUpdate struct {
-	Name          *string
-	Description   *string
-	Logo          *string
-	Hostname      *string
-	Settings      json.RawMessage
-	EnforceMFA    *bool
-	IsSCIMEnabled *bool
-	EnforceSSO    *bool
+	Name               *string
+	Description        *string
+	Logo               *string
+	Hostname           *string
+	Settings           json.RawMessage
+	EnforceMFA         *bool
+	IsSCIMEnabled      *bool
+	EnforceSSO         *bool
+	TrashRetentionDays *int
 }
 
 func (repository *Repository) UpdateWorkspace(ctx context.Context, workspaceID string, input WorkspaceUpdate) (domain.Workspace, error) {
@@ -275,8 +276,9 @@ UPDATE workspaces SET
   name = COALESCE($2, name), description = COALESCE($3, description),
   logo = COALESCE($4, logo), hostname = COALESCE($5, hostname),
   settings = COALESCE($6::jsonb, settings), enforce_mfa = COALESCE($7, enforce_mfa),
-  is_scim_enabled = COALESCE($8, is_scim_enabled), enforce_sso = COALESCE($9, enforce_sso), updated_at = now()
-WHERE id = $1 AND deleted_at IS NULL`, workspaceID, input.Name, input.Description, input.Logo, input.Hostname, nullableJSON(input.Settings), input.EnforceMFA, input.IsSCIMEnabled, input.EnforceSSO)
+  is_scim_enabled = COALESCE($8, is_scim_enabled), enforce_sso = COALESCE($9, enforce_sso),
+  trash_retention_days = COALESCE($10, trash_retention_days), updated_at = now()
+WHERE id = $1 AND deleted_at IS NULL`, workspaceID, input.Name, input.Description, input.Logo, input.Hostname, nullableJSON(input.Settings), input.EnforceMFA, input.IsSCIMEnabled, input.EnforceSSO, input.TrashRetentionDays)
 	if err != nil {
 		return domain.Workspace{}, err
 	}
