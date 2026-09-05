@@ -220,6 +220,137 @@ func remapDuplicatedContent(raw json.RawMessage, idMap, slugMap map[string]strin
 	return encoded
 }
 
+// SyncBacklinks rebuilds the outgoing backlink set for one page from its
+// current Tiptap JSON. The Node service performs the same operation in its
+// asynchronous history worker; doing it in a short transaction keeps the Go
+// collaboration path independent of Redis/Bull while remaining idempotent.
+func (repository *Repository) SyncBacklinks(ctx context.Context, pageID, workspaceID string, content json.RawMessage) error {
+	targetIDs, slugIDs := backlinkTargets(content, pageID)
+	tx, err := repository.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err = tx.Exec(ctx, `DELETE FROM backlinks WHERE source_page_id = $1 AND workspace_id = $2`, pageID, workspaceID); err != nil {
+		return err
+	}
+	if len(slugIDs) > 0 {
+		rows, queryErr := tx.Query(ctx, `SELECT id::text FROM pages WHERE workspace_id = $1 AND deleted_at IS NULL AND slug_id = ANY($2)`, workspaceID, slugIDs)
+		if queryErr != nil {
+			return queryErr
+		}
+		for rows.Next() {
+			var targetID string
+			if scanErr := rows.Scan(&targetID); scanErr != nil {
+				rows.Close()
+				return scanErr
+			}
+			targetIDs = append(targetIDs, targetID)
+		}
+		if queryErr = rows.Err(); queryErr != nil {
+			rows.Close()
+			return queryErr
+		}
+		rows.Close()
+	}
+	targetIDs = uniqueStrings(targetIDs)
+	if len(targetIDs) > 0 {
+		if _, err = tx.Exec(ctx, `
+INSERT INTO backlinks (source_page_id, target_page_id, workspace_id)
+SELECT $1, p.id, $2
+FROM pages p
+WHERE p.id::text = ANY($3) AND p.workspace_id = $2 AND p.deleted_at IS NULL AND p.id <> $1::uuid
+ON CONFLICT (source_page_id, target_page_id) DO NOTHING`, pageID, workspaceID, targetIDs); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+func backlinkTargets(content json.RawMessage, sourcePageID string) ([]string, []string) {
+	var document any
+	if json.Unmarshal(content, &document) != nil {
+		return nil, nil
+	}
+	targetIDs := make([]string, 0)
+	slugIDs := make([]string, 0)
+	seenIDs := make(map[string]struct{})
+	seenSlugs := make(map[string]struct{})
+	var walk func(any)
+	walk = func(value any) {
+		switch node := value.(type) {
+		case map[string]any:
+			if nodeType, _ := node["type"].(string); nodeType == "mention" {
+				attrs, _ := node["attrs"].(map[string]any)
+				if attrs["entityType"] == "page" {
+					if targetID, ok := attrs["entityId"].(string); ok && targetID != "" && targetID != sourcePageID {
+						if _, seen := seenIDs[targetID]; !seen {
+							seenIDs[targetID] = struct{}{}
+							targetIDs = append(targetIDs, targetID)
+						}
+					}
+				}
+			}
+			if marks, ok := node["marks"].([]any); ok {
+				for _, rawMark := range marks {
+					mark, _ := rawMark.(map[string]any)
+					if mark["type"] != "link" {
+						continue
+					}
+					attrs, _ := mark["attrs"].(map[string]any)
+					internal, _ := attrs["internal"].(bool)
+					href, _ := attrs["href"].(string)
+					if !internal {
+						continue
+					}
+					if slugID := internalLinkSlugID(href); slugID != "" {
+						if _, seen := seenSlugs[slugID]; !seen {
+							seenSlugs[slugID] = struct{}{}
+							slugIDs = append(slugIDs, slugID)
+						}
+					}
+				}
+			}
+			for _, child := range node {
+				walk(child)
+			}
+		case []any:
+			for _, child := range node {
+				walk(child)
+			}
+		}
+	}
+	walk(document)
+	return targetIDs, slugIDs
+}
+
+func internalLinkSlugID(href string) string {
+	parts := strings.Split(strings.Trim(strings.SplitN(href, "#", 2)[0], "/"), "/")
+	for index := 0; index+1 < len(parts); index++ {
+		if parts[index] == "p" {
+			return strings.TrimSpace(parts[index+1])
+		}
+	}
+	return ""
+}
+
+func uniqueStrings(values []string) []string {
+	result := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
+}
+
 func (repository *Repository) BacklinkCount(ctx context.Context, pageID, workspaceID, userID string, workspaceAdmin bool) (int64, int64, error) {
 	var incoming, outgoing int64
 	err := repository.db.QueryRow(ctx, `

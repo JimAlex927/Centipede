@@ -103,3 +103,55 @@ FROM generate_series(1, 26) AS n;
 		t.Fatalf("session retention kept %d sessions, want 25", count)
 	}
 }
+
+func TestSyncBacklinksIntegration(t *testing.T) {
+	url := os.Getenv("DOCMOST_TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("DOCMOST_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cfg, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		t.Fatal("invalid test database configuration")
+	}
+	cfg.MaxConns = 1
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if _, err := pool.Exec(ctx, `
+CREATE TEMP TABLE pages(id uuid, slug_id text, workspace_id uuid, deleted_at timestamptz);
+CREATE TEMP TABLE backlinks(
+  id uuid, source_page_id uuid, target_page_id uuid,
+  workspace_id uuid, UNIQUE(source_page_id, target_page_id)
+);
+INSERT INTO pages VALUES
+ ('00000000-0000-0000-0000-000000000001', 'source', '00000000-0000-0000-0000-000000000002', NULL),
+ ('00000000-0000-0000-0000-000000000011', 'linked', '00000000-0000-0000-0000-000000000002', NULL),
+ ('00000000-0000-0000-0000-000000000012', 'obsolete', '00000000-0000-0000-0000-000000000002', NULL);
+INSERT INTO backlinks(source_page_id, target_page_id, workspace_id)
+VALUES ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000012', '00000000-0000-0000-0000-000000000002');
+`); err != nil {
+		t.Fatal(err)
+	}
+	content := []byte(`{"type":"doc","content":[{"type":"paragraph","content":[{"type":"mention","attrs":{"entityType":"page","entityId":"00000000-0000-0000-0000-000000000011"}},{"type":"text","marks":[{"type":"link","attrs":{"internal":true,"href":"/p/linked"}}]}]}]}`)
+	if err := New(pool).SyncBacklinks(ctx, "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000002", content); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM backlinks WHERE source_page_id = '00000000-0000-0000-0000-000000000001'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("backlink sync kept %d links, want 1", count)
+	}
+	var targetID string
+	if err := pool.QueryRow(ctx, `SELECT target_page_id::text FROM backlinks WHERE source_page_id = '00000000-0000-0000-0000-000000000001'`).Scan(&targetID); err != nil {
+		t.Fatal(err)
+	}
+	if targetID != "00000000-0000-0000-0000-000000000011" {
+		t.Fatalf("backlink sync resolved target %q", targetID)
+	}
+}

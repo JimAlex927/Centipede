@@ -75,9 +75,10 @@ func (store *CollaborationStore) StoreUpdate(room string, update []byte) error {
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	var state, content []byte
+	var workspaceID string
 	err = tx.QueryRow(ctx, `
-SELECT ydoc, COALESCE(content, '{"type":"doc","content":[]}'::jsonb)
-FROM pages WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`, pageID).Scan(&state, &content)
+SELECT ydoc, COALESCE(content, '{"type":"doc","content":[]}'::jsonb), workspace_id::text
+FROM pages WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`, pageID).Scan(&state, &content, &workspaceID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -102,7 +103,14 @@ WHERE id = $1 AND deleted_at IS NULL`, pageID, fullState, jsonContent, textConte
 	if err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	if err = tx.Commit(ctx); err != nil {
+		return err
+	}
+	// Backlinks are derived data. A failed refresh must not turn a successful
+	// Yjs persistence write into a client-visible collaboration failure; the
+	// next persistence flush will retry the idempotent rebuild.
+	_ = store.db.SyncBacklinks(ctx, pageID, workspaceID, jsonContent)
+	return nil
 }
 
 // SaveVersion implements ygo's optional VersionableAdapter. Hocuspocus used
