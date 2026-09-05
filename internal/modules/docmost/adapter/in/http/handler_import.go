@@ -879,6 +879,25 @@ func htmlSpecialBlock(node *htmlnode.Node) (importNode, bool) {
 		}
 		return importNode{Type: "audio", Attrs: attrs}, true
 	}
+	if tag == "details" {
+		var summary *htmlnode.Node
+		for child := node.FirstChild; child != nil; child = child.NextSibling {
+			if child.Type == htmlnode.ElementNode && strings.EqualFold(child.Data, "summary") {
+				summary = child
+				break
+			}
+		}
+		if summary == nil {
+			return importNode{}, false
+		}
+		summaryNode := importNode{Type: "detailsSummary", Content: htmlInline(summary)}
+		contentNode := importNode{Type: "detailsContent", Content: htmlDetailsBlockChildren(node)}
+		attrs := map[string]any{}
+		if htmlHasAttribute(node, "open") {
+			attrs["open"] = true
+		}
+		return importNode{Type: "details", Attrs: attrs, Content: []importNode{summaryNode, contentNode}}, true
+	}
 	if tag != "div" && tag != "span" {
 		return importNode{}, false
 	}
@@ -947,6 +966,21 @@ func htmlSpecialBlock(node *htmlnode.Node) (importNode, bool) {
 	}
 }
 
+func htmlDetailsBlockChildren(node *htmlnode.Node) []importNode {
+	result := make([]importNode, 0)
+	for child := node.FirstChild; child != nil; child = child.NextSibling {
+		if child.Type != htmlnode.ElementNode || strings.EqualFold(child.Data, "summary") {
+			continue
+		}
+		if special, ok := htmlSpecialBlock(child); ok {
+			result = append(result, special)
+			continue
+		}
+		result = append(result, parseHTMLRoot(child)...)
+	}
+	return ensureImportContent(result)
+}
+
 func htmlMediaAttributes(node *htmlnode.Node, sourceAttribute string) map[string]any {
 	return htmlAttributes(node, map[string]string{
 		sourceAttribute:      "src",
@@ -981,6 +1015,18 @@ func htmlAttribute(node *htmlnode.Node, name string) string {
 		}
 	}
 	return ""
+}
+
+func htmlHasAttribute(node *htmlnode.Node, name string) bool {
+	if node == nil {
+		return false
+	}
+	for _, attr := range node.Attr {
+		if strings.EqualFold(attr.Key, name) {
+			return true
+		}
+	}
+	return false
 }
 
 func appendMarks(marks []importMark, kind string) []importMark {

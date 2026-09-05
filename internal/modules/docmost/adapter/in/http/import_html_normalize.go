@@ -27,6 +27,8 @@ func normalizeImportedHTML(root *htmlnode.Node) {
 	normalizeHTMLCallouts(root)
 	normalizeHTMLTodoLists(root)
 	normalizeHTMLWikiContent(root)
+	normalizeHTMLDetails(root)
+	normalizeHTMLDefaults(root)
 }
 
 func normalizeHTMLColumns(root *htmlnode.Node) {
@@ -181,6 +183,91 @@ func normalizeHTMLWikiContent(root *htmlnode.Node) {
 		parent.RemoveChild(node)
 		break
 	}
+}
+
+func normalizeHTMLDetails(root *htmlnode.Node) {
+	for _, details := range htmlElements(root) {
+		if details.Data != "details" || details.Parent == nil {
+			continue
+		}
+		// Notion wraps toggles in a list item. Move the native details node out
+		// of that wrapper so the block parser can preserve it as a top-level
+		// Docmost details node instead of treating it as inline list content.
+		if item := details.Parent; item.Data == "li" && item.Parent != nil && item.Parent.Data == "ul" && hasHTMLClass(item.Parent, "toggle") && item.Parent.Parent != nil {
+			list := item.Parent
+			container := list.Parent
+			item.RemoveChild(details)
+			container.InsertBefore(details, list)
+			if !hasMeaningfulHTMLChild(item) {
+				list.RemoveChild(item)
+			}
+			if !hasMeaningfulHTMLChild(list) {
+				removeHTMLNode(list)
+			}
+		}
+	}
+}
+
+func normalizeHTMLDefaults(root *htmlnode.Node) {
+	for _, node := range htmlElements(root) {
+		if node.Parent == nil {
+			continue
+		}
+		if node.Data == "nav" && hasHTMLClass(node, "table_of_contents") {
+			removeHTMLNode(node)
+			continue
+		}
+		if node.Data == "img" && hasHTMLClass(node, "user-icon") {
+			removeHTMLNode(node)
+			continue
+		}
+		if node.Data == "iframe" {
+			src := htmlAttribute(node, "src")
+			if src == "" {
+				continue
+			}
+			replacement := newHTMLElement("div", map[string]string{
+				"data-type": "embed", "data-src": src, "data-provider": "iframe",
+				"data-align": "center", "data-width": "640", "data-height": "480",
+			})
+			replaceHTMLNode(node, replacement)
+			continue
+		}
+		if node.Data != "figure" || !hasHTMLClass(node, "bookmark") {
+			continue
+		}
+		var link *htmlnode.Node
+		for _, child := range htmlElements(node) {
+			if child.Data == "a" && hasHTMLClass(child, "source") && htmlAttribute(child, "href") != "" {
+				link = child
+				break
+			}
+		}
+		if link == nil {
+			continue
+		}
+		title := htmlText(link)
+		for _, child := range htmlElements(link) {
+			if hasHTMLClass(child, "bookmark-title") && strings.TrimSpace(htmlText(child)) != "" {
+				title = htmlText(child)
+				break
+			}
+		}
+		replacement := newHTMLElement("p", nil)
+		anchor := newHTMLElement("a", map[string]string{"href": htmlAttribute(link, "href")})
+		anchor.AppendChild(&htmlnode.Node{Type: htmlnode.TextNode, Data: strings.TrimSpace(title)})
+		replacement.AppendChild(anchor)
+		replaceHTMLNode(node, replacement)
+	}
+}
+
+func hasMeaningfulHTMLChild(node *htmlnode.Node) bool {
+	for child := node.FirstChild; child != nil; child = child.NextSibling {
+		if child.Type == htmlnode.ElementNode || (child.Type == htmlnode.TextNode && strings.TrimSpace(child.Data) != "") {
+			return true
+		}
+	}
+	return false
 }
 
 func notionColumnsLayout(count int) string {

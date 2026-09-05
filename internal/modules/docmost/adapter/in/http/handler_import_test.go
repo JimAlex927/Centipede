@@ -112,6 +112,31 @@ func TestParseNotionHTMLSpecialNodes(t *testing.T) {
 	}
 }
 
+func TestParseNotionHTMLDetailsAndDefaultEmbeds(t *testing.T) {
+	html := `<html><body>
+<ul class="toggle"><li><details open=""><summary>展开项</summary><p>折叠内容</p></details></li></ul>
+<figure class="bookmark"><a class="bookmark source" href="https://example.com"><div class="bookmark-title">示例站点</div></a></figure>
+<iframe src="https://example.com/embed"></iframe>
+<nav class="table_of_contents"><a href="#x">目录</a></nav>
+</body></html>`
+	nodes, err := parseImportedDocument(strings.NewReader(html), ".html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 3 {
+		t.Fatalf("unexpected normalized default node count: %#v", nodes)
+	}
+	if nodes[0].Type != "details" || nodes[0].Attrs["open"] != true || len(nodes[0].Content) != 2 || importPlainText(nodes[0].Content[0].Content) != "展开项" || importPlainText(nodes[0].Content[1].Content) != "折叠内容" {
+		t.Fatalf("details were not preserved: %#v", nodes[0])
+	}
+	if nodes[1].Type != "paragraph" || len(nodes[1].Content) != 1 || nodes[1].Content[0].Marks[0].Type != "link" || nodes[1].Content[0].Marks[0].Attrs["href"] != "https://example.com" {
+		t.Fatalf("bookmark was not converted to a link: %#v", nodes[1])
+	}
+	if nodes[2].Type != "embed" || nodes[2].Attrs["src"] != "https://example.com/embed" || nodes[2].Attrs["provider"] != "iframe" {
+		t.Fatalf("iframe was not converted to an embed: %#v", nodes[2])
+	}
+}
+
 func TestParseDocxImport(t *testing.T) {
 	title := "DOCX title"
 	data, err := buildDocx(domain.Page{Title: &title, Content: []byte(`{"type":"doc","content":[{"type":"heading","attrs":{"level":2},"content":[{"type":"text","text":"Section"}]},{"type":"paragraph","content":[{"type":"text","text":"Hello ","marks":[{"type":"bold"}]},{"type":"text","text":"world"}]}]}`)})
