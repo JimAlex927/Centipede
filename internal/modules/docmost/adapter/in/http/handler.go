@@ -42,9 +42,11 @@ func (handler *Handler) SetRealtimeHandler(realtime *RealtimeHandler) {
 }
 
 type principal struct {
-	User      domain.User
-	Workspace domain.Workspace
-	SessionID string
+	User         domain.User
+	Workspace    domain.Workspace
+	SessionID    string
+	OAuthGrantID string
+	OAuthScopes  []string
 }
 
 func NewHandler(repository *postgres.Repository, secret string, cookieTTL time.Duration, cookieSecure bool, frontendURL, publicURL, legacyURL string, mailer application.Mailer, storage application.Storage, maxUpload int64, aiConfig config.AIConfig, pdfOCR config.PDFOCRConfig) *Handler {
@@ -64,6 +66,9 @@ func (handler *Handler) Register(router gin.IRouter) {
 	// a second copy of the frontend bundle.
 	router.GET("/share/p/:pageSlug", handler.sharePageRedirect)
 	router.GET("/share/:shareID/p/:pageSlug", handler.sharePageRedirect)
+	router.GET("/.well-known/oauth-authorization-server", handler.oauthMetadata)
+	router.GET("/.well-known/oauth-protected-resource", handler.oauthProtectedResourceMetadata)
+	router.GET("/.well-known/oauth-protected-resource/mcp", handler.oauthProtectedResourceMetadata)
 
 	api := router.Group("/api")
 
@@ -96,6 +101,9 @@ func (handler *Handler) Register(router gin.IRouter) {
 	api.GET("/files/public/:fileId/:fileName", handler.getPublicFile)
 	api.GET("/attachments/img/:attachmentType/:fileName", handler.getPublicImage)
 	api.POST("/version", handler.version)
+	api.GET("/oauth/authorize", handler.oauthAuthorizeEndpoint)
+	api.POST("/oauth/token", handler.oauthToken)
+	api.POST("/oauth/register", handler.oauthRegister)
 
 	protected := api.Group("")
 	protected.Use(handler.authenticate())
@@ -209,6 +217,9 @@ func (handler *Handler) authenticate() gin.HandlerFunc {
 			claims, err = handler.tokens.parse(raw, "api_key")
 		}
 		if err != nil {
+			claims, err = handler.tokens.parse(raw, "oauth_access")
+		}
+		if err != nil {
 			writeError(c, http.StatusUnauthorized, "Unauthorized")
 			c.Abort()
 			return
@@ -219,6 +230,7 @@ func (handler *Handler) authenticate() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+		oauthScopes := []string(nil)
 		if claims.Type == "api_key" {
 			active, keyErr := handler.repository.APIKeyActive(c.Request.Context(), claims.APIKeyID, claims.WorkspaceID, claims.Subject)
 			if keyErr != nil || !active {
@@ -227,6 +239,17 @@ func (handler *Handler) authenticate() gin.HandlerFunc {
 				return
 			}
 			_ = handler.repository.TouchAPIKey(c.Request.Context(), claims.APIKeyID, claims.WorkspaceID)
+		} else if claims.Type == "oauth_access" {
+			active, tokenErr := handler.repository.OAuthAccessTokenActive(c.Request.Context(), claims.JTI, claims.Subject, claims.WorkspaceID, claims.OAuthGrantID)
+			if tokenErr != nil || !active {
+				writeError(c, http.StatusUnauthorized, "Unauthorized")
+				c.Abort()
+				return
+			}
+			if claims.OAuthScope != "" {
+				oauthScopes = strings.Fields(claims.OAuthScope)
+			}
+			_ = handler.repository.TouchOAuthGrant(c.Request.Context(), claims.OAuthGrantID)
 		} else if claims.SessionID != "" {
 			active, sessionErr := handler.repository.SessionActive(c.Request.Context(), claims.SessionID, claims.Subject, claims.WorkspaceID)
 			if sessionErr != nil || !active {
@@ -241,7 +264,7 @@ func (handler *Handler) authenticate() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		c.Set(principalKey, principal{User: user, Workspace: workspace, SessionID: claims.SessionID})
+		c.Set(principalKey, principal{User: user, Workspace: workspace, SessionID: claims.SessionID, OAuthGrantID: claims.OAuthGrantID, OAuthScopes: oauthScopes})
 		c.Next()
 	}
 }
@@ -945,8 +968,8 @@ func (handler *Handler) migrationStatus(c *gin.Context) {
 	legacyFallbackConfigured := handler.legacyURL != ""
 	writeData(c, http.StatusOK, gin.H{
 		"runtime": "go", "nodeRequired": legacyFallbackConfigured, "legacyFallbackConfigured": legacyFallbackConfigured,
-		"implemented": []string{"auth-core", "users", "workspace-core", "spaces-core", "pages-core", "groups-core", "comments-core", "search-core", "shared-page-search", "attachment-search", "shares-core", "shared-attachments", "local-attachments", "file-task-query", "notifications-core", "sessions", "page-history", "collaboration-core", "realtime-core", "transclusion-lookup", "transclusion-attachment-copy", "mail-delivery", "database-integration-validation", "docmost-schema-adoption", "page-access-core", "page-permissions-management", "single-page-export", "archive-export", "export-attachments", "docx-export", "docx-import", "pdf-text-import", "markdown-html-import", "generic-zip-import", "zip-attachment-import", "notion-confluence-basic-import", "license", "api-keys", "audit-logs", "page-verification", "templates", "enterprise-mfa-core", "enterprise-personal-space-core", "enterprise-scim-token-management", "enterprise-sso-provider-management", "enterprise-bases-core", "enterprise-ai-chat-persistence", "enterprise-ai-openai-compatible", "enterprise-ai-search-answer-core"},
-		"pending":     []string{"pdf-ocr-import", "notion-confluence-full-import", "docmost-schema-upgrades", "enterprise-ai-tools-and-indexing", "enterprise-bases-advanced-filters-references", "enterprise-billing", "enterprise-oauth", "enterprise-sso-login-callback"},
+		"implemented": []string{"auth-core", "users", "workspace-core", "spaces-core", "pages-core", "groups-core", "comments-core", "search-core", "shared-page-search", "attachment-search", "shares-core", "shared-attachments", "local-attachments", "file-task-query", "notifications-core", "sessions", "page-history", "collaboration-core", "realtime-core", "transclusion-lookup", "transclusion-attachment-copy", "mail-delivery", "database-integration-validation", "docmost-schema-adoption", "page-access-core", "page-permissions-management", "single-page-export", "archive-export", "export-attachments", "docx-export", "docx-import", "pdf-text-import", "markdown-html-import", "generic-zip-import", "zip-attachment-import", "notion-confluence-basic-import", "license", "api-keys", "audit-logs", "page-verification", "templates", "enterprise-mfa-core", "enterprise-personal-space-core", "enterprise-scim-token-management", "enterprise-sso-provider-management", "enterprise-bases-core", "enterprise-ai-chat-persistence", "enterprise-ai-openai-compatible", "enterprise-ai-search-answer-core", "enterprise-oauth"},
+		"pending":     []string{"pdf-ocr-import", "notion-confluence-full-import", "docmost-schema-upgrades", "enterprise-ai-tools-and-indexing", "enterprise-bases-advanced-filters-references", "enterprise-billing", "enterprise-sso-login-callback"},
 	})
 }
 

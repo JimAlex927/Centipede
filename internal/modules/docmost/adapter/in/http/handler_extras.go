@@ -76,6 +76,10 @@ func (handler *Handler) registerExtraRoutes(router gin.IRouter) {
 	router.POST("/groups/members", handler.groupMembers)
 	router.POST("/groups/members/add", handler.addGroupMembers)
 	router.POST("/groups/members/remove", handler.removeGroupMember)
+	router.POST("/oauth/authorize-info", handler.oauthAuthorizeInfo)
+	router.POST("/oauth/authorize", handler.oauthApprove)
+	router.POST("/oauth/grants", handler.oauthGrants)
+	router.POST("/oauth/grants/revoke", handler.oauthRevokeGrant)
 
 	router.POST("/comments", handler.comments)
 	router.POST("/comments/info", handler.commentInfo)

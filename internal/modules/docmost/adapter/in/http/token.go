@@ -19,6 +19,11 @@ type tokenClaims struct {
 	Type         string `json:"type"`
 	SessionID    string `json:"sessionId,omitempty"`
 	APIKeyID     string `json:"apiKeyId,omitempty"`
+	OAuthGrantID string `json:"grantId,omitempty"`
+	OAuthScope   string `json:"scope,omitempty"`
+	Audience     string `json:"aud,omitempty"`
+	Issuer       string `json:"iss,omitempty"`
+	JTI          string `json:"jti,omitempty"`
 	ProviderID   string `json:"providerId,omitempty"`
 	Redirect     string `json:"redirect,omitempty"`
 	Nonce        string `json:"nonce,omitempty"`
@@ -74,7 +79,7 @@ func (service *tokenService) parse(raw, expectedType string) (tokenClaims, error
 	if claims.WorkspaceID == "" || claims.Type != expectedType || claims.ExpiresAt <= now || claims.IssuedAt > now+60 {
 		return tokenClaims{}, errors.New("invalid token")
 	}
-	if (claims.Type == "access" || claims.Type == "collab" || claims.Type == "mfa") && claims.Subject == "" {
+	if (claims.Type == "access" || claims.Type == "collab" || claims.Type == "mfa" || claims.Type == "mfa_token" || claims.Type == "oauth_access") && claims.Subject == "" {
 		return tokenClaims{}, errors.New("invalid token")
 	}
 	if claims.Type == "api_key" && (claims.Subject == "" || claims.APIKeyID == "") {
@@ -83,6 +88,9 @@ func (service *tokenService) parse(raw, expectedType string) (tokenClaims, error
 	// Access tokens must participate in session revocation. Other token types
 	// (for example collaboration) have their own lifetime and validation flow.
 	if claims.Type == "access" && claims.SessionID == "" {
+		return tokenClaims{}, errors.New("invalid token")
+	}
+	if claims.Type == "oauth_access" && (claims.OAuthGrantID == "" || claims.JTI == "") {
 		return tokenClaims{}, errors.New("invalid token")
 	}
 	return claims, nil
