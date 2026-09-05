@@ -4,6 +4,10 @@ import (
 	"net/http"
 	"time"
 
+	docmosthttp "centipede/internal/modules/docmost/adapter/in/http"
+	docmostpostgres "centipede/internal/modules/docmost/adapter/out/postgres"
+	docmostsmtp "centipede/internal/modules/docmost/adapter/out/smtp"
+	docmoststorage "centipede/internal/modules/docmost/adapter/out/storage"
 	identityhttp "centipede/internal/modules/identity/adapter/in/http"
 	identityjwt "centipede/internal/modules/identity/adapter/out/jwt"
 	identitypassword "centipede/internal/modules/identity/adapter/out/password"
@@ -26,9 +30,32 @@ func NewRouter(cfg config.Config, database *pgxpool.Pool, logger *zap.Logger) ht
 	}
 	engine := gin.New()
 	_ = engine.SetTrustedProxies(nil)
-	engine.Use(gin.Recovery(), requestID(), requestLogger(logger), securityHeaders())
+	engine.Use(gin.Recovery(), requestID(), requestLogger(logger), securityHeaders(), cors(cfg.Server.CORSOrigins))
 
 	systemhttp.Register(engine, database, cfg.Environment)
+	attachmentStorage, err := docmoststorage.NewLocal(cfg.Storage.DataDir)
+	if err != nil {
+		panic(err)
+	}
+	docmostHandler := docmosthttp.NewHandler(
+		docmostpostgres.New(database),
+		cfg.Auth.JWTSecret,
+		cfg.Auth.RefreshTokenTTL,
+		cfg.Auth.CookieSecure,
+		cfg.Migration.FrontendBaseURL,
+		cfg.Server.PublicURL,
+		docmostsmtp.New(cfg.Mail),
+		attachmentStorage,
+		cfg.Storage.MaxUploadBytes,
+	)
+	docmostHandler.Register(engine)
+	if cfg.Migration.LegacyBaseURL != "" {
+		legacyProxy, err := newLegacyProxy(cfg.Migration.LegacyBaseURL)
+		if err != nil {
+			panic(err)
+		}
+		engine.NoRoute(gin.WrapH(legacyProxy))
+	}
 
 	identityRepository := identitypostgres.New(database)
 	tokenService := identityjwt.New(cfg.Auth.JWTSecret, "centipede")

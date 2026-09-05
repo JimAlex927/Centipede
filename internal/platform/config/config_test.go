@@ -30,6 +30,8 @@ sso:
   client_id: "centipede.web"
   redirect_url: "http://localhost:7788/oauth/callback"
   scopes: ["openid", "profile", "email"]
+migration:
+  legacy_base_url: "http://localhost:3000"
 `
 
 func TestBuildConfigFromYAML(t *testing.T) {
@@ -42,6 +44,18 @@ func TestBuildConfigFromYAML(t *testing.T) {
 	}
 	if cfg.Auth.AccessTokenTTL.String() != "15m0s" || len(cfg.SSO.Scopes) != 3 {
 		t.Fatalf("unexpected auth/sso config: %#v", cfg)
+	}
+	if cfg.Migration.LegacyBaseURL != "http://localhost:3000" {
+		t.Fatalf("unexpected migration config: %#v", cfg.Migration)
+	}
+}
+
+func TestMigrationConfigRejectsNonHTTPURL(t *testing.T) {
+	if _, err := buildConfig([]byte(validConfigYAML+`
+migration:
+  legacy_base_url: "not-a-url"
+`), "test"); err == nil {
+		t.Fatal("expected invalid legacy URL rejection")
 	}
 }
 

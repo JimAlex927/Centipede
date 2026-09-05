@@ -1,5 +1,9 @@
 server:
   address: ":7788"
+  public_url: "CHANGE_ME"
+  # Set this to the exact origin(s) serving apps/client, for example:
+  # cors_origins: ["https://docs.example.com"]
+  cors_origins: []
   read_header_timeout: "5s"
   read_timeout: "20s"
   write_timeout: "20s"
@@ -18,8 +22,25 @@ auth:
   refresh_cookie: "centipede_refresh"
   cookie_secure: true
 
+mail:
+  from: ""
+  host: ""
+  port: 587
+  username: ""
+  password: ""
+  tls_mode: "starttls"
+
+storage:
+  data_dir: "./data"
+  max_upload_bytes: 104857600
+
 sso:
   issuer_url: "CHANGE_ME"
   client_id: "centipede.web"
   redirect_url: "CHANGE_ME"
   scopes: ["openid", "profile", "email"]
+
+migration:
+  legacy_base_url: ""
+  # Set to the public origin serving the separately deployed frontend.
+  frontend_base_url: ""

@@ -102,7 +102,10 @@ func (runtime *Runtime) applyContent(content []byte) {
 }
 
 func validateHotReload(previous, next Config) error {
-	if previous.Server != next.Server {
+	if previous.Storage != next.Storage || previous.Mail != next.Mail || previous.Migration != next.Migration {
+		return errors.New("storage, mail or migration settings changed; restart is required")
+	}
+	if !reflect.DeepEqual(previous.Server, next.Server) {
 		return errors.New("server settings changed; restart is required")
 	}
 	if previous.Database != next.Database {

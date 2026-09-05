@@ -1,5 +1,7 @@
 server:
   address: ":7788"
+  public_url: "http://localhost:7788"
+  cors_origins: ["http://localhost:5173", "http://localhost:8080"]
   read_header_timeout: "5s"
   read_timeout: "20s"
   write_timeout: "20s"
@@ -18,8 +20,27 @@ auth:
   refresh_cookie: "centipede_refresh"
   cookie_secure: false
 
+mail:
+  # Example for Mailpit/MailHog: host 127.0.0.1, port 1025, tls_mode none.
+  from: "Docmost <noreply@localhost>"
+  host: ""
+  port: 1025
+  username: ""
+  password: ""
+  tls_mode: "none"
+
+storage:
+  data_dir: "./data"
+  max_upload_bytes: 104857600
+
 sso:
   issuer_url: "http://localhost:7777"
   client_id: "centipede.web"
   redirect_url: "http://localhost:7788/oauth/callback"
   scopes: ["openid", "profile", "email"]
+
+migration:
+  # Point this at the current Docmost Node service while endpoints are migrated.
+  legacy_base_url: ""
+  # Public URL of the separately deployed frontend, used in invitation/reset links.
+  frontend_base_url: "http://localhost:5173"

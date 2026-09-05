@@ -72,6 +72,43 @@ Invoke-RestMethod http://localhost:7788/health/live
 Invoke-RestMethod http://localhost:7788/health/ready
 ```
 
+## Docmost 渐进式迁移
+
+Centipede 支持作为 Docmost 的迁移入口运行。将 `migration.legacy_base_url` 配置为现有 Node 服务地址后，Centipede 自己已经实现的路由优先处理，其余未迁移的 HTTP、Socket.IO 和 WebSocket 请求会透明转发到旧服务：
+
+```yaml
+migration:
+  legacy_base_url: "http://localhost:3000"
+```
+
+迁移期间，Docmost 前端将 `API_BASE_URL` 指向 Centipede 的 `/api` 地址即可。每迁移一个领域，再把对应路由注册到 Centipede，旧服务会自动退居为该路由的 fallback；不需要一次性切换全部接口。
+
+当前网关不访问 Allmacht 数据库，也不改变 Docmost 数据表。协同编辑和文档转换等尚未迁移的能力继续由旧 Node 服务提供。
+
+### 独立启动 Docmost 前端
+
+Docmost 的 React 前端位于 `C:\\Users\\1\\Desktop\\projects\\docmost\\docmost\\apps\\client`，可以不依赖 Node 静态服务单独启动。先启动当前 Node 服务（供尚未迁移的接口和协同能力使用），再启动 Centipede 网关：
+
+```powershell
+# 终端 1：Docmost Node 旧服务
+Set-Location C:\\Users\\1\\Desktop\\projects\\docmost\\docmost
+corepack pnpm server:dev
+
+# 终端 2：Centipede Go 网关
+Set-Location C:\\Users\\1\\Desktop\\projects\\Centipede
+# 将 config/application-dev.yaml 的 migration.legacy_base_url 设为 http://localhost:3000
+go run ./cmd/api
+
+# 终端 3：独立 React 前端
+Set-Location C:\\Users\\1\\Desktop\\projects\\docmost\\docmost
+$env:API_BASE_URL="http://localhost:7788/api"
+$env:REALTIME_URL="http://localhost:7788"
+$env:COLLAB_URL="http://localhost:7788"
+corepack pnpm client:dev
+```
+
+浏览器访问 `http://localhost:5173`。生产环境可使用根目录的 `Dockerfile.client` 构建 Nginx 静态前端；`API_BASE_URL`、`REALTIME_URL` 和 `COLLAB_URL` 可在容器启动时注入。
+
 ## 身份边界
 
 Centipede 不保存 Allmacht 密码，也不访问 Allmacht 数据库。当前本地账号使用 `identity_issuer=local`；未来 SSO 完成后，以 `(identity_issuer, identity_subject)` 映射本地 `app_users`，业务表只关联本地用户 ID。认证用例依赖本地用户、会话和 Token provider 接口，业务模块不依赖具体认证方式。
