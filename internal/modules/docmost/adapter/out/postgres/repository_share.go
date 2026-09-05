@@ -89,6 +89,48 @@ SELECT EXISTS(SELECT 1 FROM ancestors a JOIN page_access pa ON pa.page_id = a.id
 	return restricted, err
 }
 
+type PageAccessResult struct {
+	HasRestriction bool
+	CanAccess      bool
+	CanEdit        bool
+}
+
+// PageAccess evaluates all restricted ancestors. A restriction on any
+// ancestor denies traversal unless the user has a matching user/group entry;
+// the nearest restricted ancestor determines the effective writer role.
+func (repository *Repository) PageAccess(ctx context.Context, pageID, workspaceID, userID string) (PageAccessResult, error) {
+	var result PageAccessResult
+	err := repository.db.QueryRow(ctx, `
+WITH RECURSIVE ancestors AS (
+  SELECT id, parent_page_id, 0 AS depth
+  FROM pages
+  WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL
+  UNION ALL
+  SELECT p.id, p.parent_page_id, a.depth + 1
+  FROM pages p JOIN ancestors a ON a.parent_page_id = p.id
+  WHERE p.workspace_id = $2 AND p.deleted_at IS NULL
+)
+SELECT
+  COUNT(pa.id) > 0,
+  COALESCE(bool_and(pp.id IS NOT NULL) FILTER (WHERE pa.id IS NOT NULL), true),
+  COALESCE((array_agg(pp.role ORDER BY a.depth ASC, pp.role DESC NULLS LAST)
+    FILTER (WHERE pa.id IS NOT NULL))[1] = 'writer', false)
+FROM ancestors a
+LEFT JOIN page_access pa ON pa.page_id = a.id
+LEFT JOIN page_permissions pp ON pp.page_access_id = pa.id
+  AND (pp.user_id = $3 OR pp.group_id IN (
+    SELECT gu.group_id FROM group_users gu WHERE gu.user_id = $3
+  ))`, pageID, workspaceID, userID).Scan(&result.HasRestriction, &result.CanAccess, &result.CanEdit)
+	if err != nil {
+		return PageAccessResult{}, err
+	}
+	if !result.HasRestriction {
+		result.CanAccess = true
+		result.CanEdit = true
+	}
+	return result, nil
+}
+
 func (repository *Repository) ShareContainsPage(ctx context.Context, share domain.Share, pageID string) (bool, error) {
 	var contains bool
 	err := repository.db.QueryRow(ctx, `WITH RECURSIVE target AS (

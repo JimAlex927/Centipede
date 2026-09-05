@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -548,10 +549,17 @@ func (handler *Handler) pageInfo(c *gin.Context) {
 		handler.writeRepositoryError(c, err, "Page not found")
 		return
 	}
-	if !handler.requireSpaceRole(c, page.SpaceID, "reader") {
+	if !handler.requirePageAccess(c, page, false) {
 		return
 	}
-	writeData(c, http.StatusOK, withPagePermissions(page))
+	result := withPagePermissions(page)
+	permissions, permissionsErr := handler.pagePermissions(c.Request.Context(), page, current)
+	if permissionsErr != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to verify page permission")
+		return
+	}
+	result["permissions"] = permissions
+	writeData(c, http.StatusOK, result)
 }
 
 func (handler *Handler) createPage(c *gin.Context) {
@@ -582,7 +590,7 @@ func (handler *Handler) updatePage(c *gin.Context) {
 		handler.writeRepositoryError(c, err, "Page not found")
 		return
 	}
-	if !handler.requireSpaceRole(c, existing.SpaceID, "writer") {
+	if !handler.requirePageAccess(c, existing, true) {
 		return
 	}
 	page, err := handler.repository.UpdatePage(c.Request.Context(), request.PageID, current.Workspace.ID, current.User.ID, request.input())
@@ -788,6 +796,43 @@ func withPagePermissions(page domain.Page) gin.H {
 	_ = json.Unmarshal(contents, &result)
 	result["permissions"] = gin.H{"canEdit": true, "hasRestriction": false}
 	return result
+}
+
+func (handler *Handler) requirePageAccess(c *gin.Context, page domain.Page, edit bool) bool {
+	current := currentPrincipal(c)
+	minimum := "reader"
+	if edit {
+		minimum = "writer"
+	}
+	if !handler.requireSpaceRole(c, page.SpaceID, minimum) {
+		return false
+	}
+	access, err := handler.repository.PageAccess(c.Request.Context(), page.ID, current.Workspace.ID, current.User.ID)
+	if err != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to verify page permission")
+		return false
+	}
+	if access.HasRestriction && (!access.CanAccess || (edit && !access.CanEdit)) {
+		writeError(c, http.StatusForbidden, "Forbidden")
+		return false
+	}
+	return true
+}
+
+func (handler *Handler) pagePermissions(ctx context.Context, page domain.Page, current principal) (gin.H, error) {
+	access, err := handler.repository.PageAccess(ctx, page.ID, current.Workspace.ID, current.User.ID)
+	if err != nil {
+		return nil, err
+	}
+	canEdit := access.CanEdit
+	if !access.HasRestriction {
+		role, roleErr := handler.repository.SpaceRole(ctx, page.SpaceID, current.Workspace.ID, current.User.ID)
+		if roleErr != nil {
+			return nil, roleErr
+		}
+		canEdit = isAdmin(current.User) || role == "writer" || role == "admin"
+	}
+	return gin.H{"canEdit": canEdit, "hasRestriction": access.HasRestriction}, nil
 }
 
 func currentPrincipal(c *gin.Context) principal {
