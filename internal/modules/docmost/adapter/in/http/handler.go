@@ -66,6 +66,7 @@ func (handler *Handler) Register(router gin.IRouter) {
 	api.POST("/shares/page-info", handler.sharedPageInfo)
 	api.POST("/shares/tree", handler.shareTree)
 	api.POST("/search/share-search", handler.shareSearch)
+	api.POST("/shares/transclusion/lookup", handler.shareTransclusionLookup)
 	api.GET("/attachments/img/:attachmentId/:fileName", handler.getPublicImage)
 	api.POST("/version", handler.version)
 
@@ -134,6 +135,7 @@ func (handler *Handler) Register(router gin.IRouter) {
 	protected.POST("/pages/history", handler.pageHistory)
 	protected.POST("/pages/history/info", handler.pageHistoryInfo)
 	protected.POST("/pages/export", handler.exportPage)
+	protected.POST("/pages/transclusion/lookup", handler.transclusionLookup)
 	protected.POST("/file-tasks", handler.fileTasks)
 	protected.POST("/file-tasks/info", handler.fileTaskInfo)
 
