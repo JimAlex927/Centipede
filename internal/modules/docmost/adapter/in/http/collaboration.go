@@ -19,8 +19,14 @@ import (
 // operational counters as the upstream Docmost collaboration gateway.
 type CollaborationHandler struct {
 	server      *ygows.Server
+	store       *postgres.CollaborationStore
+	realtime    *RealtimeHandler
 	connections atomic.Int64
 	documents   atomic.Int64
+}
+
+func (handler *CollaborationHandler) SetRealtimeHandler(realtime *RealtimeHandler) {
+	handler.realtime = realtime
 }
 
 func (handler *CollaborationHandler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
@@ -37,8 +43,24 @@ func (handler *CollaborationHandler) Stats() (connections, documents int64) {
 // handler used by the standalone frontend. It is intentionally separate from
 // the REST handler because ygo owns the websocket room lifecycle.
 func NewCollaborationHandler(repository *postgres.Repository, secret string, allowedOrigins []string) *CollaborationHandler {
-	server := ygows.NewServerWithPersistence(repository.CollaborationStore())
-	handler := &CollaborationHandler{server: server}
+	store := repository.CollaborationStore()
+	server := ygows.NewServerWithPersistence(store)
+	handler := &CollaborationHandler{server: server, store: store}
+	store.SetVersionCallback(func(ctx context.Context, pageID, workspaceID string, actorIDs []string) {
+		actorID := ""
+		if len(actorIDs) > 0 {
+			actorID = actorIDs[0]
+		}
+		deliveries, err := repository.CreatePageUpdateNotifications(ctx, pageID, workspaceID, actorID, actorIDs)
+		if err != nil || handler.realtime == nil {
+			return
+		}
+		for _, delivery := range deliveries {
+			handler.realtime.PublishNotification(workspaceID, delivery.UserID, map[string]any{
+				"type": "page.updated", "notificationId": delivery.ID, "pageId": pageID,
+			})
+		}
+	})
 	// Docmost coalesces collaboration history roughly every five minutes for
 	// established pages. ygo invokes SaveVersion after persistence flushes and
 	// the adapter makes duplicate snapshots a no-op.
@@ -76,6 +98,9 @@ func NewCollaborationHandler(repository *postgres.Repository, secret string, all
 		if err != nil {
 			return ygows.ConnectionConfig{}, false
 		}
+		if !readOnly {
+			store.AddContributor("page."+pageID, claims.Subject)
+		}
 		return ygows.ConnectionConfig{ReadOnly: readOnly}, true
 	}
 
@@ -99,6 +124,9 @@ func NewCollaborationHandler(repository *postgres.Repository, secret string, all
 		readOnly, err := collaborationReadOnly(ctx, repository, pageID, claims.WorkspaceID, claims.Subject, pointerValue(user.Role))
 		if err != nil {
 			return ygows.ConnectionConfig{}, errors.New("page access denied")
+		}
+		if !readOnly {
+			store.AddContributor(room, claims.Subject)
 		}
 		return ygows.ConnectionConfig{ReadOnly: readOnly}, nil
 	}

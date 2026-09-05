@@ -202,3 +202,90 @@ INSERT INTO user_sessions VALUES
 		t.Fatalf("session activity was not refreshed: session=%v user=%v", sessionActivity, userActivity)
 	}
 }
+
+func TestPageUpdateNotificationsIntegration(t *testing.T) {
+	url := os.Getenv("DOCMOST_TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("DOCMOST_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cfg, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		t.Fatal("invalid test database configuration")
+	}
+	cfg.MaxConns = 1
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if _, err := pool.Exec(ctx, `
+CREATE TEMP TABLE pages(
+  id uuid, workspace_id uuid, space_id uuid, deleted_at timestamptz
+);
+CREATE TEMP TABLE spaces(
+  id uuid, deleted_at timestamptz, visibility text
+);
+CREATE TEMP TABLE users(
+  id uuid, workspace_id uuid, deleted_at timestamptz,
+  deactivated_at timestamptz, settings jsonb
+);
+CREATE TEMP TABLE watchers(
+  user_id uuid, workspace_id uuid, page_id uuid, space_id uuid,
+  muted_at timestamptz
+);
+CREATE TEMP TABLE space_members(
+  space_id uuid, user_id uuid, group_id uuid, deleted_at timestamptz
+);
+CREATE TEMP TABLE group_users(group_id uuid, user_id uuid);
+CREATE TEMP TABLE notifications(
+  id text DEFAULT 'notification', user_id uuid, workspace_id uuid,
+  type text, actor_id uuid, page_id uuid, space_id uuid,
+  created_at timestamptz DEFAULT now()
+);
+INSERT INTO pages VALUES
+  ('00000000-0000-0000-0000-000000000101',
+   '00000000-0000-0000-0000-000000000102',
+   '00000000-0000-0000-0000-000000000103', NULL);
+INSERT INTO spaces VALUES
+  ('00000000-0000-0000-0000-000000000103', NULL, 'public');
+INSERT INTO users VALUES
+  ('00000000-0000-0000-0000-000000000111',
+   '00000000-0000-0000-0000-000000000102', NULL, NULL, '{}'::jsonb);
+INSERT INTO watchers VALUES
+  ('00000000-0000-0000-0000-000000000111',
+   '00000000-0000-0000-0000-000000000102',
+   '00000000-0000-0000-0000-000000000101', NULL, NULL);
+`); err != nil {
+		t.Fatal(err)
+	}
+	repository := New(pool)
+	actorID := "00000000-0000-0000-0000-000000000112"
+	deliveries, err := repository.CreatePageUpdateNotifications(
+		ctx,
+		"00000000-0000-0000-0000-000000000101",
+		"00000000-0000-0000-0000-000000000102",
+		actorID,
+		[]string{actorID},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deliveries) != 1 || deliveries[0].UserID != "00000000-0000-0000-0000-000000000111" {
+		t.Fatalf("page update deliveries = %#v, want one watcher delivery", deliveries)
+	}
+	second, err := repository.CreatePageUpdateNotifications(
+		ctx,
+		"00000000-0000-0000-0000-000000000101",
+		"00000000-0000-0000-0000-000000000102",
+		actorID,
+		[]string{actorID},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second) != 0 {
+		t.Fatalf("page update cooldown delivered %d duplicate notifications", len(second))
+	}
+}

@@ -68,6 +68,7 @@ func NewRouter(cfg config.Config, database *pgxpool.Pool, logger *zap.Logger) ht
 	})
 	realtimeHandler := docmosthttp.NewRealtimeHandler(docmostRepository, cfg.Auth.JWTSecret, cfg.Server.CORSOrigins)
 	docmostHandler.SetRealtimeHandler(realtimeHandler)
+	collaborationHandler.SetRealtimeHandler(realtimeHandler)
 	engine.GET("/realtime", gin.WrapH(realtimeHandler))
 	docmostHandler.Register(engine)
 	if cfg.Migration.LegacyBaseURL != "" {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"centipede/internal/modules/docmost/adapter/yjs"
@@ -17,10 +18,44 @@ import (
 // The room name is page.<page uuid>, matching the Docmost frontend.
 type CollaborationStore struct {
 	db *Repository
+
+	mu           sync.Mutex
+	contributors map[string]map[string]struct{}
+	onVersion    func(context.Context, string, string, []string)
 }
 
 func (repository *Repository) CollaborationStore() *CollaborationStore {
-	return &CollaborationStore{db: repository}
+	return &CollaborationStore{db: repository, contributors: make(map[string]map[string]struct{})}
+}
+
+func (store *CollaborationStore) AddContributor(room, userID string) {
+	if strings.TrimSpace(room) == "" || strings.TrimSpace(userID) == "" {
+		return
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.contributors[room] == nil {
+		store.contributors[room] = make(map[string]struct{})
+	}
+	store.contributors[room][userID] = struct{}{}
+}
+
+func (store *CollaborationStore) consumeContributors(room string) []string {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	set := store.contributors[room]
+	delete(store.contributors, room)
+	result := make([]string, 0, len(set))
+	for userID := range set {
+		result = append(result, userID)
+	}
+	return result
+}
+
+func (store *CollaborationStore) SetVersionCallback(callback func(context.Context, string, string, []string)) {
+	store.mu.Lock()
+	store.onVersion = callback
+	store.mu.Unlock()
 }
 
 func pageIDFromRoom(room string) (string, error) {
@@ -131,6 +166,7 @@ func (store *CollaborationStore) SaveVersion(ctx context.Context, room, _ string
 	}
 
 	var inserted int64
+	var workspaceID string
 	err = store.db.db.QueryRow(ctx, `
 INSERT INTO page_history
   (page_id, slug_id, title, content, icon, cover_photo, last_updated_by_id,
@@ -145,9 +181,18 @@ WHERE p.id = $1 AND p.deleted_at IS NULL
     WHERE h.page_id = p.id
       AND h.content IS NOT DISTINCT FROM p.content
   )
-RETURNING 1`, pageID).Scan(&inserted)
+RETURNING 1, workspace_id::text`, pageID).Scan(&inserted, &workspaceID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, nil
+	}
+	if err == nil && inserted > 0 {
+		actors := store.consumeContributors(room)
+		store.mu.Lock()
+		callback := store.onVersion
+		store.mu.Unlock()
+		if callback != nil {
+			callback(ctx, pageID, workspaceID, actors)
+		}
 	}
 	return inserted, err
 }

@@ -6,6 +6,59 @@ import (
 	"centipede/internal/modules/docmost/domain"
 )
 
+type NotificationDelivery struct {
+	ID     string
+	UserID string
+}
+
+// CreatePageUpdateNotifications creates the local in-app notifications that
+// Docmost normally produces in its notification worker. The seven-hour
+// cooldown prevents a frequently edited page from flooding watchers.
+func (repository *Repository) CreatePageUpdateNotifications(ctx context.Context, pageID, workspaceID, actorID string, actorIDs []string) ([]NotificationDelivery, error) {
+	rows, err := repository.db.Query(ctx, `
+WITH recipients AS (
+  SELECT DISTINCT w.user_id, p.space_id
+  FROM pages p
+  JOIN watchers w ON w.workspace_id = p.workspace_id
+    AND (w.page_id = p.id OR (w.page_id IS NULL AND w.space_id = p.space_id))
+  JOIN spaces s ON s.id = p.space_id AND s.deleted_at IS NULL
+  JOIN users u ON u.id = w.user_id AND u.workspace_id = p.workspace_id
+  WHERE p.id = $1 AND p.workspace_id = $2 AND p.deleted_at IS NULL
+    AND w.muted_at IS NULL AND u.deleted_at IS NULL AND u.deactivated_at IS NULL
+    AND COALESCE(u.settings->'notifications'->>'page.updated', 'true') <> 'false'
+    AND (s.visibility = 'public'
+      OR EXISTS (SELECT 1 FROM space_members sm WHERE sm.space_id = s.id AND sm.user_id = u.id AND sm.deleted_at IS NULL)
+      OR EXISTS (SELECT 1 FROM space_members sm JOIN group_users gu ON gu.group_id = sm.group_id
+                 WHERE sm.space_id = s.id AND gu.user_id = u.id AND sm.deleted_at IS NULL))
+    AND (COALESCE(array_length($4::uuid[], 1), 0) = 0 OR NOT (u.id = ANY($4::uuid[])))
+), eligible AS (
+  SELECT r.user_id, r.space_id
+  FROM recipients r
+  WHERE NOT EXISTS (
+    SELECT 1 FROM notifications n
+    WHERE n.user_id = r.user_id AND n.page_id = $1 AND n.workspace_id = $2
+      AND n.type = 'page.updated' AND n.created_at > now() - interval '7 hours'
+  )
+)
+INSERT INTO notifications (user_id, workspace_id, type, actor_id, page_id, space_id)
+SELECT e.user_id, $2, 'page.updated', NULLIF($3, '')::uuid, $1, e.space_id
+FROM eligible e
+RETURNING id::text, user_id::text`, pageID, workspaceID, actorID, actorIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	deliveries := make([]NotificationDelivery, 0)
+	for rows.Next() {
+		var delivery NotificationDelivery
+		if err := rows.Scan(&delivery.ID, &delivery.UserID); err != nil {
+			return nil, err
+		}
+		deliveries = append(deliveries, delivery)
+	}
+	return deliveries, rows.Err()
+}
+
 func (repository *Repository) Notifications(ctx context.Context, workspaceID, userID, notificationType string, limit int) (domain.Pagination[domain.Notification], error) {
 	if notificationType == "" {
 		notificationType = "all"
