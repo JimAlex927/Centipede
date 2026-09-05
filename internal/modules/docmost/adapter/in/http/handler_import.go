@@ -128,6 +128,7 @@ func parseImportedDocumentWithOCR(reader io.Reader, extension string, ocrConfig 
 	if err != nil {
 		return nil, err
 	}
+	normalizeImportedHTML(document)
 	return parseHTMLRoot(document), nil
 }
 
@@ -729,10 +730,20 @@ func parseHTMLRoot(root *htmlnode.Node) []importNode {
 				list := importNode{Type: "bulletList", Content: []importNode{}}
 				if tag == "ol" {
 					list.Type = "orderedList"
+				} else if htmlAttribute(node, "data-type") == "taskList" {
+					list.Type = "taskList"
 				}
 				for child := node.FirstChild; child != nil; child = child.NextSibling {
 					if child.Type == htmlnode.ElementNode && strings.EqualFold(child.Data, "li") {
-						list.Content = append(list.Content, importNode{Type: "listItem", Content: []importNode{{Type: "paragraph", Content: htmlInline(child)}}})
+						itemType := "listItem"
+						if list.Type == "taskList" {
+							itemType = "taskItem"
+						}
+						attrs := map[string]any{}
+						if checked := htmlAttribute(child, "data-checked"); checked != "" {
+							attrs["checked"] = checked == "true"
+						}
+						list.Content = append(list.Content, importNode{Type: itemType, Attrs: attrs, Content: []importNode{{Type: "paragraph", Content: htmlInline(child)}}})
 					}
 				}
 				result = append(result, list)

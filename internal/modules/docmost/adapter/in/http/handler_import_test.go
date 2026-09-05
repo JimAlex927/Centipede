@@ -77,6 +77,41 @@ func TestParseHTMLDocmostCustomNodes(t *testing.T) {
 	}
 }
 
+func TestParseNotionHTMLSpecialNodes(t *testing.T) {
+	html := `<html><body>
+<header><span class="page-header-icon">📘</span><img class="page-cover-image" src="cover.png"></header>
+<p class="page-description">   </p>
+<div class="column-list"><div class="column"><div style="display:contents"><p>左侧</p></div></div><div class="column"><p>右侧</p></div></div>
+<figure class="equation"><math><annotation encoding="application/x-tex">x^2</annotation></math></figure>
+<p>面积 <span class="notion-text-equation-token"><math><annotation encoding="application/x-tex">a+b</annotation></math></span></p>
+<figure class="callout"><div><span>💡</span></div><div><p>提示内容</p></div></figure>
+<ul class="to-do-list"><li><span class="checkbox checkbox-on"></span><span class="to-do-children-checked">已完成</span></li><li><span class="checkbox"></span><span class="to-do-children-unchecked">待处理</span></li></ul>
+</body></html>`
+
+	nodes, err := parseImportedDocument(strings.NewReader(html), ".html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 5 {
+		t.Fatalf("unexpected Notion node count: %#v", nodes)
+	}
+	if nodes[0].Type != "columns" || len(nodes[0].Content) != 2 || nodes[0].Content[0].Type != "column" || importPlainText(nodes[0].Content[0].Content) != "左侧" || importPlainText(nodes[0].Content[1].Content) != "右侧" {
+		t.Fatalf("Notion columns were not normalized: %#v", nodes[0])
+	}
+	if nodes[1].Type != "mathBlock" || nodes[1].Attrs["text"] != "x^2" {
+		t.Fatalf("Notion block equation was not normalized: %#v", nodes[1])
+	}
+	if nodes[2].Type != "paragraph" || len(nodes[2].Content) != 2 || nodes[2].Content[1].Type != "mathInline" || nodes[2].Content[1].Attrs["text"] != "a+b" {
+		t.Fatalf("Notion inline equation was not normalized: %#v", nodes[2])
+	}
+	if nodes[3].Type != "callout" || importPlainText(nodes[3].Content) != "提示内容" {
+		t.Fatalf("Notion callout was not normalized: %#v", nodes[3])
+	}
+	if nodes[4].Type != "taskList" || len(nodes[4].Content) != 2 || nodes[4].Content[0].Type != "taskItem" || nodes[4].Content[0].Attrs["checked"] != true || nodes[4].Content[1].Attrs["checked"] != false || importPlainText(nodes[4].Content[0].Content) != "已完成" {
+		t.Fatalf("Notion todo list was not normalized: %#v", nodes[4])
+	}
+}
+
 func TestParseDocxImport(t *testing.T) {
 	title := "DOCX title"
 	data, err := buildDocx(domain.Page{Title: &title, Content: []byte(`{"type":"doc","content":[{"type":"heading","attrs":{"level":2},"content":[{"type":"text","text":"Section"}]},{"type":"paragraph","content":[{"type":"text","text":"Hello ","marks":[{"type":"bold"}]},{"type":"text","text":"world"}]}]}`)})

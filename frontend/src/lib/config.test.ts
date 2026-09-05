@@ -22,6 +22,12 @@ describe("getFileUrl", () => {
     );
   });
 
+  it("converts the Node-compatible workspace/files storage path", () => {
+    expect(getFileUrl("workspace-1/files/attachment-1/diagram.drawio.svg")).toBe(
+      "http://localhost:7788/api/files/attachment-1/diagram.drawio.svg",
+    );
+  });
+
   it("accepts a relative files path from imported HTML", () => {
     expect(getFileUrl("files/attachment-1/manual.pdf")).toBe(
       "http://localhost:7788/api/files/attachment-1/manual.pdf",

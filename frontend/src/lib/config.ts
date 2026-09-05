@@ -119,9 +119,9 @@ export function getFileUrl(src: string) {
   // Keep those documents readable after switching away from the Node
   // monolith.  The workspace segment is intentionally discarded because
   // the protected file endpoint addresses attachments by id.
-  const storagePath = sourcePath.match(
-    /^\/?file\/[^/]+\/([^/]+)\/(.+?)(\?.*)?(#.*)?$/,
-  );
+  const storagePath =
+    sourcePath.match(/^\/?file\/[^/]+\/(?:files\/)?([^/]+)\/(.+)$/) ||
+    sourcePath.match(/^\/?[^/]+\/files\/([^/]+)\/(.+)$/);
   if (storagePath) {
     return `${getBackendUrl()}/files/${storagePath[1]}/${storagePath[2]}${suffix}`;
   }

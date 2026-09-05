@@ -9,6 +9,7 @@ import {
   getAttachmentInfo,
   uploadFile,
 } from "@/features/page/services/page-service.ts";
+import { getFileUrl } from "@/lib/config.ts";
 
 const ATTACHMENT_NODE_TYPES = [
   "image",
@@ -165,7 +166,9 @@ async function reuploadPastedAttachments(
       if (!fileUrl) return;
 
       try {
-        const response = await fetch(fileUrl, { credentials: "include" });
+        const response = await fetch(getFileUrl(fileUrl), {
+          credentials: "include",
+        });
         if (!response.ok) return;
         const blob = await response.blob();
         const file = new File([blob], node.fileName, { type: blob.type });

@@ -82,5 +82,26 @@ export default defineConfig(({ mode }) => {
         },
       },
     },
+    // `vite preview` does not inherit the dev server proxy automatically.
+    // Keeping the same proxy here makes a production build testable without
+    // silently sending attachment/API requests to the static frontend port.
+    preview: {
+      proxy: {
+        "/api": {
+          target: backendUrl,
+          changeOrigin: false,
+        },
+        "/collab": {
+          target: backendUrl,
+          ws: true,
+          rewriteWsOrigin: true,
+        },
+        "/realtime": {
+          target: backendUrl,
+          ws: true,
+          rewriteWsOrigin: true,
+        },
+      },
+    },
   };
 });

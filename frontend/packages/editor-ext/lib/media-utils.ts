@@ -42,8 +42,8 @@ export function normalizeFileUrl(src: string): string {
 
   let normalizedPath = sourcePath;
   const storagePath = sourcePath.match(
-    /^\/?file\/[^/]+\/([^/]+)\/(.+)$/,
-  );
+    /^\/?file\/[^/]+\/(?:files\/)?([^/]+)\/(.+)$/,
+  ) || sourcePath.match(/^\/?[^/]+\/files\/([^/]+)\/(.+)$/);
   if (storagePath) {
     normalizedPath = `/api/files/${storagePath[1]}/${storagePath[2]}`;
   } else if (sourcePath.match(/^\/?files\/([^/]+)\/(.+)$/)) {

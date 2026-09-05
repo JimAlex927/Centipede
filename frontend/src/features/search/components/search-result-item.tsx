@@ -13,6 +13,7 @@ import { Link } from "react-router-dom";
 import { IconFile, IconDownload } from "@tabler/icons-react";
 import { buildPageUrl } from "@/features/page/page.utils";
 import { getPageIcon } from "@/lib";
+import { getFileUrl } from "@/lib/config";
 import {
   IAttachmentSearch,
   IPageSearch,
@@ -48,7 +49,9 @@ export function SearchResultItem({
     const handleDownload = (e: React.MouseEvent) => {
       e.preventDefault();
       e.stopPropagation();
-      const downloadUrl = `/api/files/${attachmentResult.id}/${attachmentResult.fileName}`;
+      const downloadUrl = getFileUrl(
+        `/api/files/${attachmentResult.id}/${encodeURIComponent(attachmentResult.fileName)}`,
+      );
       window.open(downloadUrl, "_blank");
     };
 
