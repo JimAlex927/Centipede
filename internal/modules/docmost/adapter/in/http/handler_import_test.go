@@ -1,6 +1,7 @@
 package http
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -60,4 +61,40 @@ func TestParseDocxImport(t *testing.T) {
 	if len(nodes[2].Content) != 2 || len(nodes[2].Content[0].Marks) != 1 || nodes[2].Content[0].Marks[0].Type != "bold" {
 		t.Fatalf("docx marks were not preserved: %#v", nodes[2].Content)
 	}
+}
+
+func TestParsePDFImport(t *testing.T) {
+	data := minimalTestPDF("Hello PDF")
+	nodes, err := parsePDF(strings.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 1 || importPlainText(nodes[0].Content) != "Hello PDF" {
+		t.Fatalf("unexpected PDF nodes: %#v", nodes)
+	}
+}
+
+func minimalTestPDF(text string) string {
+	var document strings.Builder
+	document.WriteString("%PDF-1.4\n")
+	offsets := []int{0}
+	objects := []string{
+		"<< /Type /Catalog /Pages 2 0 R >>",
+		"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+		"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+		"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+	}
+	stream := fmt.Sprintf("BT /F1 18 Tf 72 720 Td (%s) Tj ET\n", text)
+	objects = append(objects, fmt.Sprintf("<< /Length %d >>\nstream\n%sendstream", len(stream), stream))
+	for index, object := range objects {
+		offsets = append(offsets, document.Len())
+		fmt.Fprintf(&document, "%d 0 obj\n%s\nendobj\n", index+1, object)
+	}
+	xrefOffset := document.Len()
+	fmt.Fprintf(&document, "xref\n0 %d\n0000000000 65535 f \n", len(objects)+1)
+	for _, offset := range offsets[1:] {
+		fmt.Fprintf(&document, "%010d 00000 n \n", offset)
+	}
+	fmt.Fprintf(&document, "trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", len(objects)+1, xrefOffset)
+	return document.String()
 }

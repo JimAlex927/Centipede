@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -18,6 +19,7 @@ import (
 	"centipede/internal/modules/docmost/adapter/out/postgres"
 
 	"github.com/gin-gonic/gin"
+	"github.com/ledongthuc/pdf"
 )
 
 const singlePageImportLimit = 30 * 1024 * 1024
@@ -55,12 +57,8 @@ func (handler *Handler) importPage(c *gin.Context) {
 		return
 	}
 	extension := strings.ToLower(filepath.Ext(file.Filename))
-	if extension != ".md" && extension != ".html" && extension != ".docx" {
-		if extension == ".pdf" {
-			writeError(c, http.StatusNotImplemented, "PDF import is not implemented in Go yet")
-		} else {
-			writeError(c, http.StatusBadRequest, "Invalid import file type.")
-		}
+	if extension != ".md" && extension != ".html" && extension != ".docx" && extension != ".pdf" {
+		writeError(c, http.StatusBadRequest, "Invalid import file type.")
 		return
 	}
 	opened, err := file.Open()
@@ -97,11 +95,58 @@ func parseImportedDocument(reader io.Reader, extension string) ([]importNode, er
 	if extension == ".docx" {
 		return parseDocx(reader)
 	}
+	if extension == ".pdf" {
+		return parsePDF(reader)
+	}
 	document, err := htmlnode.Parse(reader)
 	if err != nil {
 		return nil, err
 	}
 	return parseHTMLRoot(document), nil
+}
+
+func parsePDF(reader io.Reader) ([]importNode, error) {
+	data, err := io.ReadAll(io.LimitReader(reader, singlePageImportLimit+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > singlePageImportLimit {
+		return nil, errors.New("import file is too large")
+	}
+	temporary, err := os.CreateTemp("", "docmost-import-*.pdf")
+	if err != nil {
+		return nil, err
+	}
+	temporaryName := temporary.Name()
+	defer os.Remove(temporaryName)
+	if _, err = temporary.Write(data); err != nil {
+		_ = temporary.Close()
+		return nil, err
+	}
+	if err = temporary.Close(); err != nil {
+		return nil, err
+	}
+	file, document, err := pdf.Open(temporaryName)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	plainText, err := document.GetPlainText()
+	if err != nil {
+		return nil, err
+	}
+	text, err := io.ReadAll(io.LimitReader(plainText, singlePageImportLimit+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(text) > singlePageImportLimit {
+		return nil, errors.New("import file is too large")
+	}
+	value := strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(string(text), "\r\n", "\n"), "\r", "\n"))
+	if value == "" {
+		return nil, errors.New("PDF contains no extractable text")
+	}
+	return []importNode{{Type: "paragraph", Content: []importNode{{Type: "text", Text: value}}}}, nil
 }
 
 type docxImportParagraph struct {
