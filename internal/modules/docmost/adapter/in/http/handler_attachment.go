@@ -117,6 +117,7 @@ func (handler *Handler) uploadFile(c *gin.Context) {
 		return
 	}
 	attachment.URL = handler.fileURL(c, attachment)
+	handler.scheduleAttachmentIndex(attachment)
 	// The upstream upload endpoint returns the attachment itself, rather than
 	// the API envelope used by most JSON endpoints. The editor upload helpers
 	// intentionally consume attachment.id/fileName/fileSize directly.

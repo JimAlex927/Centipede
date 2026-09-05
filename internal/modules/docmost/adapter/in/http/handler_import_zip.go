@@ -521,14 +521,16 @@ func (handler *Handler) createImportedAttachment(ctx context.Context, pageID, sp
 	}
 	pageValue := pageID
 	spaceValue := spaceID
-	if _, err = handler.repository.CreateAttachment(ctx, postgres.AttachmentInput{
+	attachment, err := handler.repository.CreateAttachment(ctx, postgres.AttachmentInput{
 		ID: attachmentID, FileName: fileName, FilePath: relativePath, FileSize: int64(len(data)), FileExt: extension,
 		MimeType: mimeType, Type: "file", CreatorID: current.User.ID, WorkspaceID: current.Workspace.ID,
 		PageID: &pageValue, SpaceID: &spaceValue,
-	}); err != nil {
+	})
+	if err != nil {
 		_ = handler.storage.Delete(ctx, relativePath)
 		return "", err
 	}
+	handler.scheduleAttachmentIndex(attachment)
 	return attachmentID, nil
 }
 

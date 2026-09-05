@@ -115,6 +115,12 @@ WHERE id = $1 AND page_id = $2 AND workspace_id = $3 AND lower(file_ext) = lower
 	return repository.AttachmentByID(ctx, attachmentID, workspaceID)
 }
 
+func (repository *Repository) UpdateAttachmentTextContent(ctx context.Context, attachmentID, workspaceID, textContent string) error {
+	_, err := repository.db.Exec(ctx, `UPDATE attachments SET text_content = $3, updated_at = now()
+WHERE id = $1 AND workspace_id = $2 AND type = 'file' AND deleted_at IS NULL`, attachmentID, workspaceID, textContent)
+	return err
+}
+
 func (repository *Repository) DeleteAttachment(ctx context.Context, attachmentID, workspaceID string) error {
 	_, err := repository.db.Exec(ctx, `DELETE FROM attachments WHERE id = $1 AND workspace_id = $2`, attachmentID, workspaceID)
 	return err
