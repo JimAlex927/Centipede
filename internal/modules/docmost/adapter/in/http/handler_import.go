@@ -30,6 +30,8 @@ import (
 
 const singlePageImportLimit = 30 * 1024 * 1024
 
+var errPDFOCRNotConfigured = errors.New("PDF contains no extractable text; configure pdf_ocr for scanned PDFs")
+
 type importNode struct {
 	Type    string         `json:"type"`
 	Attrs   map[string]any `json:"attrs,omitempty"`
@@ -75,6 +77,10 @@ func (handler *Handler) importPage(c *gin.Context) {
 	defer opened.Close()
 	nodes, err := parseImportedDocumentWithOCR(opened, extension, handler.pdfOCR)
 	if err != nil {
+		if errors.Is(err, errPDFOCRNotConfigured) {
+			writeError(c, http.StatusBadRequest, err.Error())
+			return
+		}
 		writeError(c, http.StatusBadRequest, "Failed to parse imported file")
 		return
 	}
@@ -146,7 +152,7 @@ func parsePDFWithOCR(reader io.Reader, ocrConfig config.PDFOCRConfig) ([]importN
 			if extractionErr != nil {
 				return nil, extractionErr
 			}
-			return nil, errors.New("PDF contains no extractable text; configure pdf_ocr for scanned PDFs")
+			return nil, errPDFOCRNotConfigured
 		}
 		value, err = extractPDFTextWithOCR(temporaryName, ocrConfig)
 		if err != nil {
