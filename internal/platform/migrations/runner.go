@@ -118,10 +118,78 @@ func AdoptExisting(ctx context.Context, pool *pgxpool.Pool, directory, version s
 	if len(missing) > 0 {
 		return fmt.Errorf("existing database is missing Docmost schema elements: %s", strings.Join(missing, ", "))
 	}
+	var objectErr error
+	if missing, objectErr = missingDocmostObjects(ctx, pool); objectErr != nil {
+		return objectErr
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("existing database is missing Docmost schema objects: %s", strings.Join(missing, ", "))
+	}
 	if _, err := pool.Exec(ctx, `INSERT INTO schema_migrations (version) VALUES ($1) ON CONFLICT (version) DO NOTHING`, version); err != nil {
 		return fmt.Errorf("record adopted baseline: %w", err)
 	}
 	return nil
+}
+
+func missingDocmostObjects(ctx context.Context, pool *pgxpool.Pool) ([]string, error) {
+	missing := make([]string, 0)
+	for _, extension := range []string{"pg_trgm", "unaccent"} {
+		var exists bool
+		if err := pool.QueryRow(ctx, `SELECT EXISTS(
+			SELECT 1 FROM pg_extension WHERE extname = $1
+		)`, extension).Scan(&exists); err != nil || !exists {
+			if err != nil {
+				return nil, fmt.Errorf("check extension %s: %w", extension, err)
+			}
+			missing = append(missing, "extension "+extension)
+		}
+	}
+
+	for _, function := range []struct {
+		name string
+		args string
+	}{
+		{name: "f_unaccent", args: "text"},
+		{name: "gen_uuid_v7", args: ""},
+		{name: "pages_tsvector_trigger", args: ""},
+	} {
+		var exists bool
+		if err := pool.QueryRow(ctx, `SELECT EXISTS(
+			SELECT 1
+			FROM pg_proc p
+			JOIN pg_namespace n ON n.oid = p.pronamespace
+			WHERE n.nspname = 'public'
+			  AND p.proname = $1
+			  AND pg_get_function_identity_arguments(p.oid) = $2
+		)`, function.name, function.args).Scan(&exists); err != nil || !exists {
+			if err != nil {
+				return nil, fmt.Errorf("check function public.%s: %w", function.name, err)
+			}
+			label := "function public." + function.name + "("
+			if function.args != "" {
+				label += function.args
+			}
+			missing = append(missing, label+")")
+		}
+	}
+
+	var exists bool
+	if err := pool.QueryRow(ctx, `SELECT EXISTS(
+		SELECT 1
+		FROM pg_trigger t
+		JOIN pg_class c ON c.oid = t.tgrelid
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE n.nspname = 'public'
+		  AND c.relname = 'pages'
+		  AND t.tgname = 'pages_tsvector_update'
+		  AND NOT t.tgisinternal
+	)`).Scan(&exists); err != nil || !exists {
+		if err != nil {
+			return nil, fmt.Errorf("check page search trigger: %w", err)
+		}
+		missing = append(missing, "trigger public.pages.pages_tsvector_update")
+	}
+	return missing, nil
 }
 
 var docmostAdoptionSchema = map[string][]string{

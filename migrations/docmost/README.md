@@ -23,10 +23,11 @@ For an existing installation, first take a database backup and then run:
 go run ./cmd/migrate -dir migrations/docmost -adopt-existing
 ```
 
-The adoption command validates the core Docmost tables and columns, then only
-records the baseline in `schema_migrations`; it does not run `CREATE`, `ALTER`,
-or data-changing SQL. An older or incomplete schema is rejected and must be
-upgraded separately before starting Go.
+The adoption command validates the core Docmost tables, columns, extensions,
+functions and page-search trigger, then only records the baseline in
+`schema_migrations`; it does not run `CREATE`, `ALTER`, or data-changing SQL.
+An older or incomplete schema is rejected and must be upgraded separately
+before starting Go.
 
 The Go migration runner records the baseline and skips it on subsequent runs.
 No Node runtime is needed to apply it. The source-side `go-test-migrate.ts` script
