@@ -107,7 +107,9 @@ corepack pnpm client:dev
 扫描版 PDF 的 OCR 是可选外部能力，不依赖 Node。配置 `pdf_ocr.tesseract_path` 和
 `pdf_ocr.pdftoppm_path` 后，Go 后端会在文本提取为空时调用这两个程序；不配置时仍支持普通文本 PDF 导入，并会明确提示需要 OCR 配置。
 
-浏览器访问 `http://localhost:5173`。生产环境可使用根目录的 `Dockerfile.client` 构建 Nginx 静态前端；`API_BASE_URL`、`REALTIME_URL` 和 `COLLAB_URL` 可在容器启动时注入。
+浏览器访问 `http://localhost:5173`。生产环境可使用 Docmost 前端仓库
+`C:\Users\1\Desktop\projects\docmost\docmost\Dockerfile.client` 构建 Nginx 静态前端；
+`API_BASE_URL`、`REALTIME_URL` 和 `COLLAB_URL` 可在构建时传入。
 
 ## 身份边界
 
