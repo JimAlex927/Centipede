@@ -756,7 +756,15 @@ func (handler *Handler) breadcrumbs(c *gin.Context) {
 		return
 	}
 	current := currentPrincipal(c)
-	items, err := handler.repository.Breadcrumbs(c.Request.Context(), request.PageID, current.Workspace.ID)
+	page, err := handler.repository.PageByID(c.Request.Context(), request.PageID, "", current.Workspace.ID, false)
+	if err != nil {
+		handler.writeRepositoryError(c, err, "Page not found")
+		return
+	}
+	if !handler.requirePageAccess(c, page, false) {
+		return
+	}
+	items, err := handler.repository.Breadcrumbs(c.Request.Context(), page.ID, current.Workspace.ID)
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, "Failed to load breadcrumbs")
 		return

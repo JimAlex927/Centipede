@@ -55,7 +55,7 @@ func (handler *Handler) backlinkCount(c *gin.Context) {
 		handler.writeRepositoryError(c, err, "Page not found")
 		return
 	}
-	if !handler.requireSpaceRole(c, page.SpaceID, "reader") {
+	if !handler.requirePageAccess(c, page, false) {
 		return
 	}
 	incoming, outgoing, err := handler.repository.BacklinkCount(c.Request.Context(), page.ID, current.Workspace.ID, current.User.ID, isAdmin(current.User))
@@ -77,7 +77,7 @@ func (handler *Handler) backlinks(c *gin.Context) {
 		handler.writeRepositoryError(c, err, "Page not found")
 		return
 	}
-	if !handler.requireSpaceRole(c, page.SpaceID, "reader") {
+	if !handler.requirePageAccess(c, page, false) {
 		return
 	}
 	result, err := handler.repository.BacklinkPages(c.Request.Context(), page.ID, current.Workspace.ID, current.User.ID, request.Direction, isAdmin(current.User), request.Limit)
@@ -103,7 +103,7 @@ func (handler *Handler) pageHistory(c *gin.Context) {
 		handler.writeRepositoryError(c, err, "Page not found")
 		return
 	}
-	if !handler.requireSpaceRole(c, page.SpaceID, "reader") {
+	if !handler.requirePageAccess(c, page, false) {
 		return
 	}
 	result, err := handler.repository.PageHistory(c.Request.Context(), page.ID, current.Workspace.ID, request.Limit)
@@ -130,7 +130,7 @@ func (handler *Handler) pageHistoryInfo(c *gin.Context) {
 		handler.writeRepositoryError(c, err, "Page not found")
 		return
 	}
-	if !handler.requireSpaceRole(c, page.SpaceID, "reader") {
+	if !handler.requirePageAccess(c, page, false) {
 		return
 	}
 	writeData(c, http.StatusOK, history)

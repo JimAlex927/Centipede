@@ -572,7 +572,7 @@ func (repository *Repository) ChangeSpaceMemberRole(ctx context.Context, spaceID
 	return err
 }
 
-func (repository *Repository) SearchPages(ctx context.Context, workspaceID, query string, spaceID *string, limit int) ([]domain.SearchPage, error) {
+func (repository *Repository) SearchPages(ctx context.Context, workspaceID, query string, spaceID *string, limit int, viewerID string, viewerAdmin bool) ([]domain.SearchPage, error) {
 	query = strings.TrimSpace(query)
 	rows, err := repository.db.Query(ctx, `
 SELECT p.id::text, p.title, p.icon, p.parent_page_id::text, p.slug_id, p.creator_id::text,
@@ -582,9 +582,10 @@ SELECT p.id::text, p.title, p.icon, p.parent_page_id::text, p.slug_id, p.creator
  s.id::text, s.name, s.slug
 FROM pages p JOIN spaces s ON s.id = p.space_id
 WHERE p.workspace_id = $1 AND p.deleted_at IS NULL AND ($3::uuid IS NULL OR p.space_id = $3)
+  AND `+strings.NewReplacer("$8", "$5", "$9", "$6").Replace(pageListAccessSQL)+`
   AND ($2 = '' OR COALESCE(p.title, '') ILIKE '%' || $2 || '%' OR COALESCE(p.text_content, '') ILIKE '%' || $2 || '%')
 ORDER BY CASE WHEN $2 = '' THEN p.updated_at END DESC, similarity(COALESCE(p.title, ''), $2) DESC
-LIMIT $4`, workspaceID, query, spaceID, normalizeLimit(limit))
+LIMIT $4`, workspaceID, query, spaceID, normalizeLimit(limit), viewerID, viewerAdmin)
 	if err != nil {
 		return nil, err
 	}
@@ -602,7 +603,7 @@ LIMIT $4`, workspaceID, query, spaceID, normalizeLimit(limit))
 	return items, rows.Err()
 }
 
-func (repository *Repository) Suggestions(ctx context.Context, workspaceID, query string, includeUsers, includeGroups, includePages bool, spaceID *string, limit int) (map[string]any, error) {
+func (repository *Repository) Suggestions(ctx context.Context, workspaceID, query string, includeUsers, includeGroups, includePages bool, spaceID *string, limit int, viewerID string, viewerAdmin bool) (map[string]any, error) {
 	result := map[string]any{}
 	like := "%" + strings.TrimSpace(query) + "%"
 	if includeUsers {
@@ -636,7 +637,7 @@ func (repository *Repository) Suggestions(ctx context.Context, workspaceID, quer
 		result["groups"] = filtered
 	}
 	if includePages {
-		pages, err := repository.SearchPages(ctx, workspaceID, query, spaceID, limit)
+		pages, err := repository.SearchPages(ctx, workspaceID, query, spaceID, limit, viewerID, viewerAdmin)
 		if err != nil {
 			return nil, err
 		}

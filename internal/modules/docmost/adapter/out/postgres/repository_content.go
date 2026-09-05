@@ -201,12 +201,9 @@ SELECT
   count(*) FILTER (WHERE b.target_page_id = $1),
   count(*) FILTER (WHERE b.source_page_id = $1)
 FROM backlinks b
-JOIN pages related ON related.id = CASE WHEN b.target_page_id = $1 THEN b.source_page_id ELSE b.target_page_id END
-JOIN spaces s ON s.id = related.space_id
-WHERE b.workspace_id = $2 AND (b.target_page_id = $1 OR b.source_page_id = $1) AND related.deleted_at IS NULL
-AND ($4 OR s.visibility = 'public'
-  OR EXISTS (SELECT 1 FROM space_members sm WHERE sm.space_id = s.id AND sm.user_id = $3 AND sm.deleted_at IS NULL)
-  OR EXISTS (SELECT 1 FROM space_members sm JOIN group_users gu ON gu.group_id = sm.group_id WHERE sm.space_id = s.id AND gu.user_id = $3 AND sm.deleted_at IS NULL))`,
+JOIN pages p ON p.id = CASE WHEN b.target_page_id = $1 THEN b.source_page_id ELSE b.target_page_id END
+WHERE b.workspace_id = $2 AND p.workspace_id = $2 AND (b.target_page_id = $1 OR b.source_page_id = $1) AND p.deleted_at IS NULL
+AND `+strings.NewReplacer("$8", "$3", "$9", "$4").Replace(pageListAccessSQL),
 		pageID, workspaceID, userID, workspaceAdmin).Scan(&incoming, &outgoing)
 	return incoming, outgoing, err
 }
@@ -224,9 +221,8 @@ JOIN spaces s ON s.id = p.space_id
 WHERE b.workspace_id = $2
   AND (($4 = 'incoming' AND b.target_page_id = $1) OR ($4 = 'outgoing' AND b.source_page_id = $1))
   AND p.deleted_at IS NULL
-  AND ($5 OR s.visibility = 'public'
-    OR EXISTS (SELECT 1 FROM space_members sm WHERE sm.space_id = s.id AND sm.user_id = $3 AND sm.deleted_at IS NULL)
-    OR EXISTS (SELECT 1 FROM space_members sm JOIN group_users gu ON gu.group_id = sm.group_id WHERE sm.space_id = s.id AND gu.user_id = $3 AND sm.deleted_at IS NULL))
+  AND p.workspace_id = $2
+  AND `+strings.NewReplacer("$8", "$3", "$9", "$5").Replace(pageListAccessSQL)+`
 ORDER BY p.updated_at DESC, p.id DESC LIMIT $6`, pageID, workspaceID, userID, direction, workspaceAdmin, normalizeLimit(limit))
 	if err != nil {
 		return domain.Pagination[domain.BacklinkPage]{}, err

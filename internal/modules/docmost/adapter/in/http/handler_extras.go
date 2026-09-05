@@ -834,7 +834,7 @@ func (handler *Handler) search(c *gin.Context) {
 		return
 	}
 	current := currentPrincipal(c)
-	items, err := handler.repository.SearchPages(c.Request.Context(), current.Workspace.ID, request.Query, request.SpaceID, request.Limit)
+	items, err := handler.repository.SearchPages(c.Request.Context(), current.Workspace.ID, request.Query, request.SpaceID, request.Limit, current.User.ID, isAdmin(current.User))
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, "Failed to search pages")
 		return
@@ -851,7 +851,7 @@ func (handler *Handler) suggest(c *gin.Context) {
 	includeGroups := request.IncludeGroups == nil || *request.IncludeGroups
 	includePages := request.IncludePages == nil || *request.IncludePages
 	current := currentPrincipal(c)
-	result, err := handler.repository.Suggestions(c.Request.Context(), current.Workspace.ID, request.Query, includeUsers, includeGroups, includePages, request.SpaceID, request.Limit)
+	result, err := handler.repository.Suggestions(c.Request.Context(), current.Workspace.ID, request.Query, includeUsers, includeGroups, includePages, request.SpaceID, request.Limit, current.User.ID, isAdmin(current.User))
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, "Failed to load suggestions")
 		return
