@@ -447,12 +447,26 @@ func markdownInline(value string) []importNode {
 	result := make([]importNode, 0)
 	tokens := []struct{ token, kind string }{{"**", "bold"}, {"__", "bold"}, {"*", "italic"}, {"_", "italic"}, {"`", "code"}}
 	for len(value) > 0 {
+		if strings.HasPrefix(value, "![") {
+			if closeAlt := strings.Index(value[2:], "]("); closeAlt >= 0 {
+				closeAlt += 2
+				if closeURL := strings.Index(value[closeAlt+2:], ")"); closeURL >= 0 {
+					closeURL += closeAlt + 2
+					result = append(result, importNode{Type: "image", Attrs: map[string]any{"alt": value[2:closeAlt], "src": strings.TrimSpace(value[closeAlt+2 : closeURL])}})
+					value = value[closeURL+1:]
+					continue
+				}
+			}
+		}
 		start := len(value)
 		selected := struct{ token, kind string }{}
 		for _, candidate := range tokens {
 			if index := strings.Index(value, candidate.token); index >= 0 && index < start {
 				start, selected = index, candidate
 			}
+		}
+		if index := strings.Index(value, "!["); index >= 0 && index < start {
+			start = index
 		}
 		if start == len(value) {
 			result = append(result, importNode{Type: "text", Text: value})
@@ -461,6 +475,13 @@ func markdownInline(value string) []importNode {
 		if start > 0 {
 			result = append(result, importNode{Type: "text", Text: value[:start]})
 			value = value[start:]
+			if selected.token == "" {
+				continue
+			}
+		}
+		if selected.token == "" {
+			result = append(result, importNode{Type: "text", Text: value})
+			break
 		}
 		width := len(selected.token)
 		end := strings.Index(value[width:], selected.token)

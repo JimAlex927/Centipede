@@ -794,8 +794,8 @@ func (handler *Handler) version(c *gin.Context) {
 func (handler *Handler) migrationStatus(c *gin.Context) {
 	writeData(c, http.StatusOK, gin.H{
 		"runtime": "go", "nodeRequired": true,
-		"implemented": []string{"auth-core", "users", "workspace-core", "spaces-core", "pages-core", "groups-core", "comments-core", "search-core", "shared-page-search", "attachment-search", "shares-core", "local-attachments", "file-task-query", "notifications-core", "sessions", "page-history", "collaboration-core", "realtime-core", "transclusion-lookup", "page-access-core", "single-page-export", "archive-export", "export-attachments", "docx-export", "docx-import", "markdown-html-import", "generic-zip-import"},
-		"pending":     []string{"pdf-import", "notion-confluence-import", "zip-attachment-import", "transclusion-attachment-copy", "mail-delivery", "page-permissions-management", "shared-attachments", "docmost-schema-migrations", "database-integration-validation", "enterprise"},
+		"implemented": []string{"auth-core", "users", "workspace-core", "spaces-core", "pages-core", "groups-core", "comments-core", "search-core", "shared-page-search", "attachment-search", "shares-core", "local-attachments", "file-task-query", "notifications-core", "sessions", "page-history", "collaboration-core", "realtime-core", "transclusion-lookup", "page-access-core", "single-page-export", "archive-export", "export-attachments", "docx-export", "docx-import", "markdown-html-import", "generic-zip-import", "zip-attachment-import"},
+		"pending":     []string{"pdf-import", "notion-confluence-import", "transclusion-attachment-copy", "mail-delivery", "page-permissions-management", "shared-attachments", "docmost-schema-migrations", "database-integration-validation", "enterprise"},
 	})
 }
 
