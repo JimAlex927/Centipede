@@ -25,7 +25,15 @@ function getBackendBaseUrl(): string {
 export function normalizeFileUrl(src: string): string {
   if (!src) return "";
 
-  const normalized = src.startsWith("/files/") ? "/api" + src : src;
+  let normalized = src;
+  const storagePath = src.match(
+    /^\/?file\/[^/]+\/([^/]+)\/(.+?)(\?.*)?(#.*)?$/,
+  );
+  if (storagePath) {
+    normalized = `/api/files/${storagePath[1]}/${storagePath[2]}${storagePath[3] || ""}${storagePath[4] || ""}`;
+  } else if (src.match(/^\/?files\/([^/]+)\/(.+?)(\?.*)?(#.*)?$/)) {
+    normalized = src.startsWith("/") ? "/api" + src : "/api/" + src;
+  }
   if (!normalized.startsWith("/api/")) {
     return normalized;
   }

@@ -94,6 +94,28 @@ export function getSpaceUrl(spaceSlug: string) {
 export function getFileUrl(src: string) {
   if (!src) return src;
   if (src.startsWith("http")) return src;
+
+  // Older Go-imported pages can persist the storage path instead of the
+  // public API path, for example:
+  //   file/<workspace-id>/<attachment-id>/<file-name>
+  // Keep those documents readable after switching away from the Node
+  // monolith.  The workspace segment is intentionally discarded because
+  // the protected file endpoint addresses attachments by id.
+  const storagePath = src.match(
+    /^\/?file\/[^/]+\/([^/]+)\/(.+?)(\?.*)?(#.*)?$/,
+  );
+  if (storagePath) {
+    return `${getBackendUrl()}/files/${storagePath[1]}/${storagePath[2]}${storagePath[3] || ""}${storagePath[4] || ""}`;
+  }
+
+  // Also accept the same path without the leading slash. This form can be
+  // present in exported/imported HTML and otherwise becomes a frontend-local
+  // relative URL.
+  const publicPath = src.match(/^\/?files\/([^/]+)\/(.+?)(\?.*)?(#.*)?$/);
+  if (publicPath) {
+    return `${getBackendUrl()}/files/${publicPath[1]}/${publicPath[2]}${publicPath[3] || ""}${publicPath[4] || ""}`;
+  }
+
   if (src.startsWith("/api/")) {
     // Remove the '/api' prefix
     return getBackendUrl() + src.substring(4);
