@@ -117,6 +117,17 @@ func (handler *RealtimeHandler) ServeHTTP(response http.ResponseWriter, request 
 		if spaceID == "" || !handler.canAccessSpace(request.Context(), client, spaceID) {
 			continue
 		}
+		pageID, valid := realtimePageID(envelope.Data, true)
+		if !valid {
+			continue
+		}
+		// Deleted pages no longer have reliable permission records. Send only
+		// a refetch signal, never the caller's stale page metadata.
+		if event["operation"] == "deleteTreeNode" || event["operation"] == "refetchRootTreeNodeEvent" {
+			envelope.Data = marshalRealtimeData(map[string]any{"operation": "refetchRootTreeNodeEvent", "spaceId": spaceID})
+		} else if !handler.hub.canAccessPage(client, spaceID, pageID) {
+			continue
+		}
 		handler.hub.broadcast(client, realtimeEnvelope{Event: "message", Data: envelope.Data}, spaceID)
 	}
 }
@@ -185,6 +196,10 @@ func (hub *realtimeHub) broadcast(sender *realtimeClient, envelope realtimeEnvel
 }
 
 func (hub *realtimeHub) broadcastToSpace(workspaceID, spaceID string, envelope realtimeEnvelope, excluded *realtimeClient) {
+	pageID, valid := realtimePageID(envelope.Data, false)
+	if !valid {
+		return
+	}
 	hub.mu.RLock()
 	clients := make([]*realtimeClient, 0, len(hub.clients))
 	for client := range hub.clients {
@@ -200,6 +215,9 @@ func (hub *realtimeHub) broadcastToSpace(workspaceID, spaceID string, envelope r
 	}
 	for _, client := range clients {
 		if !hub.canAccessSpace(client, spaceID) {
+			continue
+		}
+		if pageID != "" && !hub.canAccessPage(client, spaceID, pageID) {
 			continue
 		}
 		_ = client.write(payload)
@@ -238,6 +256,60 @@ func (hub *realtimeHub) canAccessSpace(client *realtimeClient, spaceID string) b
 	defer cancel()
 	role, err := hub.repository.SpaceRole(ctx, spaceID, client.workspace, client.userID)
 	return err == nil && role != ""
+}
+
+func (hub *realtimeHub) canAccessPage(client *realtimeClient, spaceID, pageID string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	actualSpace, deleted, err := hub.repository.CollaborationPage(ctx, pageID, client.workspace)
+	if err != nil || deleted || actualSpace != spaceID {
+		return false
+	}
+	access, err := hub.repository.PageAccess(ctx, pageID, client.workspace, client.userID)
+	return err == nil && access.CanAccess
+}
+
+// Only tree events may originate from browsers. Comment events are emitted
+// after successful REST mutations and cannot be forged through this channel.
+func realtimePageID(data json.RawMessage, inbound bool) (string, bool) {
+	var event struct {
+		Operation string `json:"operation"`
+		ID        string `json:"id"`
+		PageID    string `json:"pageId"`
+		Payload   struct {
+			ID   string `json:"id"`
+			Data struct {
+				ID string `json:"id"`
+			} `json:"data"`
+			Node struct {
+				ID string `json:"id"`
+			} `json:"node"`
+		} `json:"payload"`
+	}
+	if json.Unmarshal(data, &event) != nil {
+		return "", false
+	}
+	var id string
+	switch event.Operation {
+	case "refetchRootTreeNodeEvent":
+		return "", true
+	case "addTreeNode":
+		id = event.Payload.Data.ID
+	case "moveTreeNode":
+		id = event.Payload.ID
+	case "deleteTreeNode":
+		id = event.Payload.Node.ID
+	case "updateOne":
+		id = event.ID
+	case "commentCreated", "commentUpdated", "commentResolved", "commentDeleted":
+		if inbound {
+			return "", false
+		}
+		id = event.PageID
+	default:
+		return "", false
+	}
+	return id, id != ""
 }
 
 func (client *realtimeClient) write(payload []byte) error {
