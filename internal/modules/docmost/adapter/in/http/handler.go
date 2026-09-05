@@ -269,7 +269,14 @@ func (handler *Handler) authenticate() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		c.Set(principalKey, principal{User: user, Workspace: workspace, SessionID: claims.SessionID, OAuthGrantID: claims.OAuthGrantID, OAuthScopes: oauthScopes})
+		current := principal{User: user, Workspace: workspace, SessionID: claims.SessionID, OAuthGrantID: claims.OAuthGrantID, OAuthScopes: oauthScopes}
+		c.Set(principalKey, current)
+		if required := requiredOAuthScope(c.Request.Method, c.FullPath()); current.OAuthGrantID != "" && !hasOAuthScope(current.OAuthScopes, required) {
+			c.Header("WWW-Authenticate", `Bearer error="insufficient_scope", scope="`+required+`"`)
+			writeError(c, http.StatusForbidden, "OAuth "+required+" scope is required")
+			c.Abort()
+			return
+		}
 		c.Next()
 	}
 }
@@ -973,8 +980,8 @@ func (handler *Handler) migrationStatus(c *gin.Context) {
 	legacyFallbackConfigured := handler.legacyURL != ""
 	writeData(c, http.StatusOK, gin.H{
 		"runtime": "go", "nodeRequired": legacyFallbackConfigured, "legacyFallbackConfigured": legacyFallbackConfigured,
-		"implemented": []string{"auth-core", "users", "workspace-core", "spaces-core", "pages-core", "groups-core", "comments-core", "search-core", "shared-page-search", "attachment-search", "shares-core", "shared-attachments", "local-attachments", "file-task-query", "notifications-core", "sessions", "page-history", "collaboration-core", "realtime-core", "transclusion-lookup", "transclusion-attachment-copy", "mail-delivery", "database-integration-validation", "docmost-schema-adoption", "page-access-core", "page-permissions-management", "single-page-export", "archive-export", "export-attachments", "docx-export", "docx-import", "pdf-text-import", "markdown-html-import", "generic-zip-import", "zip-attachment-import", "notion-confluence-basic-import", "license", "api-keys", "audit-logs", "page-verification", "templates", "enterprise-mfa-core", "enterprise-personal-space-core", "enterprise-scim-token-management", "enterprise-sso-provider-management", "enterprise-sso-group-sync", "enterprise-bases-core", "enterprise-bases-filter-sort", "enterprise-ai-chat-persistence", "enterprise-ai-openai-compatible", "enterprise-ai-search-answer-core", "enterprise-oauth", "enterprise-sso-login-callback", "enterprise-mcp-tools"},
-		"pending":     []string{"pdf-ocr-import", "notion-confluence-full-import", "docmost-schema-upgrades", "enterprise-ai-tools-and-indexing", "enterprise-bases-advanced-filters-references", "enterprise-billing"},
+		"implemented": []string{"auth-core", "users", "workspace-core", "spaces-core", "pages-core", "groups-core", "comments-core", "search-core", "shared-page-search", "attachment-search", "shares-core", "shared-attachments", "local-attachments", "file-task-query", "notifications-core", "sessions", "page-history", "collaboration-core", "realtime-core", "transclusion-lookup", "transclusion-attachment-copy", "mail-delivery", "database-integration-validation", "docmost-schema-adoption", "page-access-core", "page-permissions-management", "single-page-export", "archive-export", "export-attachments", "docx-export", "docx-import", "pdf-text-import", "pdf-ocr-import", "markdown-html-import", "generic-zip-import", "zip-attachment-import", "notion-confluence-basic-import", "license", "api-keys", "audit-logs", "page-verification", "templates", "enterprise-mfa-core", "enterprise-personal-space-core", "enterprise-scim-token-management", "enterprise-sso-provider-management", "enterprise-sso-group-sync", "enterprise-bases-core", "enterprise-bases-filter-sort", "enterprise-ai-chat-persistence", "enterprise-ai-openai-compatible", "enterprise-ai-search-answer-core", "enterprise-oauth", "enterprise-sso-login-callback", "enterprise-mcp-tools"},
+		"pending":     []string{"notion-confluence-full-import", "docmost-schema-upgrades", "enterprise-ai-tools-and-indexing", "enterprise-bases-advanced-filters-references", "enterprise-billing"},
 	})
 }
 

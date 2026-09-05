@@ -121,7 +121,7 @@ WHERE t.workspace_id = $1 AND t.deleted_at IS NULL
         ))
     )
   )
-  AND ($5 = '' OR (lower(COALESCE(t.title, '')), t.id) > (lower($6), $7::uuid))
+  AND ($5 = '' OR (lower(COALESCE(t.title, '')), t.id) > (lower($6), NULLIF($7, '')::uuid))
 ORDER BY lower(COALESCE(t.title, '')), t.id
 LIMIT $8`, workspaceID, spaceID, admin, viewerID, cursor, position.Title, position.ID, pageSize+1)
 	if err != nil {
