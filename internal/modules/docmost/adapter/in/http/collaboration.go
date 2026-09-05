@@ -83,37 +83,13 @@ func NewCollaborationHandler(repository *postgres.Repository, secret string, all
 		handler.documents.Add(-1)
 	}
 
-	// Reject unauthenticated upgrades before ygo sends the initial document
-	// state. The browser sends the Go authToken cookie to the websocket host.
-	server.Authorize = func(request *http.Request) (ygows.ConnectionConfig, bool) {
-		cookie, err := request.Cookie("authToken")
-		if err != nil || strings.TrimSpace(cookie.Value) == "" {
-			return ygows.ConnectionConfig{}, false
-		}
-		claims, err := tokens.parse(cookie.Value, "access")
-		if err != nil {
-			return ygows.ConnectionConfig{}, false
-		}
-		user, err := repository.UserByID(request.Context(), claims.Subject, claims.WorkspaceID)
-		if err != nil || user.DeactivatedAt != nil || user.DeletedAt != nil {
-			return ygows.ConnectionConfig{}, false
-		}
-		pageID, err := roomPageID(request.URL.Path)
-		if err != nil {
-			return ygows.ConnectionConfig{}, false
-		}
-		readOnly, err := collaborationReadOnly(request.Context(), repository, pageID, claims.WorkspaceID, claims.Subject, pointerValue(user.Role))
-		if err != nil {
-			return ygows.ConnectionConfig{}, false
-		}
-		if !readOnly {
-			store.AddContributor("page."+pageID, claims.Subject)
-		}
-		return ygows.ConnectionConfig{ReadOnly: readOnly}, true
-	}
-
+	// Match the upstream Hocuspocus flow: allow the WebSocket upgrade and
+	// authenticate with the short-lived collaboration JWT sent in-band by the
+	// provider. Requiring authToken at the HTTP upgrade boundary breaks when the
+	// frontend and Go backend are on different origins because SameSite cookies
+	// are not guaranteed to accompany that handshake.
 	// Hocuspocus sends the collaboration JWT in-band after the websocket
-	// upgrade. Validate it too, and calculate read-only access for the page.
+	// upgrade. Validate it and calculate read-only access for the page.
 	server.OnTokenAuth = func(room, rawToken string) (ygows.ConnectionConfig, error) {
 		claims, err := tokens.parse(rawToken, "collab")
 		if err != nil {

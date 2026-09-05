@@ -3,6 +3,7 @@ package http
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -16,6 +17,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"centipede/internal/modules/docmost/adapter/out/postgres"
 
@@ -86,26 +88,41 @@ func (handler *Handler) importZip(c *gin.Context) {
 		writeError(c, http.StatusInternalServerError, "Failed to create import task")
 		return
 	}
-	if err := handler.processGenericZip(c, data, spaceID, source, current); err != nil {
-		message := err.Error()
-		_ = handler.repository.UpdateFileTaskStatus(c.Request.Context(), task.ID, current.Workspace.ID, "failed", message)
-		task.ErrorMessage = &message
-		status := "failed"
-		task.Status = &status
-		writeData(c, http.StatusOK, task)
-		return
-	}
-	_ = handler.repository.UpdateFileTaskStatus(c.Request.Context(), task.ID, current.Workspace.ID, "success", "")
-	status := "success"
-	task.Status = &status
+	// ZIP imports can contain hundreds of pages and attachments.  The Node
+	// implementation puts this work on BullMQ and returns the processing task
+	// immediately; keep the same contract so the browser can poll file-tasks
+	// without holding the upload request open.
+	go handler.runZipImport(data, task.ID, spaceID, source, current)
 	writeData(c, http.StatusOK, task)
+}
+
+const zipImportTimeout = 30 * time.Minute
+
+func (handler *Handler) runZipImport(data []byte, taskID, spaceID, source string, current principal) {
+	ctx, cancel := context.WithTimeout(context.Background(), zipImportTimeout)
+	defer cancel()
+
+	status := "success"
+	errorMessage := ""
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			status = "failed"
+			errorMessage = "ZIP import failed unexpectedly"
+		}
+		_ = handler.repository.UpdateFileTaskStatus(context.Background(), taskID, current.Workspace.ID, status, errorMessage)
+	}()
+
+	if err := handler.processGenericZip(ctx, data, spaceID, source, current); err != nil {
+		status = "failed"
+		errorMessage = err.Error()
+	}
 }
 
 func isSupportedZipImportSource(source string) bool {
 	return source == "generic" || source == "notion" || source == "confluence"
 }
 
-func (handler *Handler) processGenericZip(c *gin.Context, data []byte, spaceID, source string, current principal) error {
+func (handler *Handler) processGenericZip(ctx context.Context, data []byte, spaceID, source string, current principal) error {
 	archive, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
 		return errors.New("invalid ZIP archive")
@@ -145,12 +162,23 @@ func (handler *Handler) processGenericZip(c *gin.Context, data []byte, spaceID, 
 		}
 	}
 	sort.Slice(directoriesList, func(left, right int) bool {
+		leftPartial := source == "notion" && notionPartialIDSuffix.MatchString(pathpkg.Base(directoriesList[left]))
+		rightPartial := source == "notion" && notionPartialIDSuffix.MatchString(pathpkg.Base(directoriesList[right]))
+		if leftPartial != rightPartial {
+			return leftPartial
+		}
 		return zipPathDepth(directoriesList[left]) < zipPathDepth(directoriesList[right]) || (zipPathDepth(directoriesList[left]) == zipPathDepth(directoriesList[right]) && directoriesList[left] < directoriesList[right])
 	})
+	if source == "notion" {
+		mergeNotionFolderPages(&entries, directoriesList)
+	}
 	pageByPath := make(map[string]string)
 	for _, directory := range directoriesList {
+		if isSingleZipRootDirectory(directory, directoriesList, entries) {
+			continue
+		}
 		title := zipImportTitle(pathpkg.Base(directory), source)
-		page, createErr := handler.repository.CreatePage(c.Request.Context(), current.Workspace.ID, current.User.ID, postgres.PageInput{Title: &title, SpaceID: &spaceID, ParentPageID: optionalString(pageByPath[pathpkg.Dir(directory)]), Content: []byte(`{"type":"doc","content":[]}`)})
+		page, createErr := handler.repository.CreatePage(ctx, current.Workspace.ID, current.User.ID, postgres.PageInput{Title: &title, SpaceID: &spaceID, ParentPageID: optionalString(pageByPath[pathpkg.Dir(directory)]), Content: []byte(`{"type":"doc","content":[]}`)})
 		if createErr != nil {
 			return createErr
 		}
@@ -171,18 +199,18 @@ func (handler *Handler) processGenericZip(c *gin.Context, data []byte, spaceID, 
 		if marshalErr != nil {
 			return marshalErr
 		}
-		page, createErr := handler.repository.CreatePage(c.Request.Context(), current.Workspace.ID, current.User.ID, postgres.PageInput{Title: &title, SpaceID: &spaceID, ParentPageID: optionalString(pageByPath[pathpkg.Dir(entry.Path)]), Content: content})
+		page, createErr := handler.repository.CreatePage(ctx, current.Workspace.ID, current.User.ID, postgres.PageInput{Title: &title, SpaceID: &spaceID, ParentPageID: optionalString(pageByPath[pathpkg.Dir(entry.Path)]), Content: content})
 		if createErr != nil {
 			return createErr
 		}
-		if err := handler.importZipAttachments(c, page.ID, page.SpaceID, entry.Path, source, nodes, assets, current); err != nil {
+		if err := handler.importZipAttachments(ctx, page.ID, page.SpaceID, entry.Path, source, nodes, assets, current); err != nil {
 			return err
 		}
 		updatedContent, marshalErr := json.Marshal(importNode{Type: "doc", Content: nodes})
 		if marshalErr != nil {
 			return marshalErr
 		}
-		if _, updateErr := handler.repository.UpdatePage(c.Request.Context(), page.ID, current.Workspace.ID, current.User.ID, postgres.PageInput{Content: updatedContent}); updateErr != nil {
+		if _, updateErr := handler.repository.UpdatePage(ctx, page.ID, current.Workspace.ID, current.User.ID, postgres.PageInput{Content: updatedContent}); updateErr != nil {
 			return updateErr
 		}
 	}
@@ -198,7 +226,7 @@ func isSupportedZipDocumentExtension(extension string) bool {
 	}
 }
 
-func (handler *Handler) importZipAttachments(c *gin.Context, pageID, spaceID, pagePath, source string, nodes []importNode, assets map[string]*zip.File, current principal) error {
+func (handler *Handler) importZipAttachments(ctx context.Context, pageID, spaceID, pagePath, source string, nodes []importNode, assets map[string]*zip.File, current principal) error {
 	if handler.storage == nil || len(assets) == 0 {
 		return nil
 	}
@@ -222,7 +250,7 @@ func (handler *Handler) importZipAttachments(c *gin.Context, pageID, spaceID, pa
 					attachmentID, importedOK := imported[resourcePath]
 					if !importedOK {
 						var err error
-						attachmentID, err = handler.createImportedAttachment(c, pageID, spaceID, resourcePath, file, current)
+						attachmentID, err = handler.createImportedAttachment(ctx, pageID, spaceID, resourcePath, file, current)
 						if err != nil {
 							return err
 						}
@@ -243,7 +271,7 @@ func (handler *Handler) importZipAttachments(c *gin.Context, pageID, spaceID, pa
 	return walk(nodes)
 }
 
-func (handler *Handler) createImportedAttachment(c *gin.Context, pageID, spaceID, resourcePath string, file *zip.File, current principal) (string, error) {
+func (handler *Handler) createImportedAttachment(ctx context.Context, pageID, spaceID, resourcePath string, file *zip.File, current principal) (string, error) {
 	if file.UncompressedSize64 > maxImportedAttachmentSize {
 		return "", errors.New("ZIP attachment is too large")
 	}
@@ -270,17 +298,17 @@ func (handler *Handler) createImportedAttachment(c *gin.Context, pageID, spaceID
 		mimeType = http.DetectContentType(data)
 	}
 	relativePath := pathpkg.Join("file", current.Workspace.ID, attachmentID, fileName)
-	if _, err = handler.storage.Save(c.Request.Context(), relativePath, bytes.NewReader(data), maxImportedAttachmentSize); err != nil {
+	if _, err = handler.storage.Save(ctx, relativePath, bytes.NewReader(data), maxImportedAttachmentSize); err != nil {
 		return "", err
 	}
 	pageValue := pageID
 	spaceValue := spaceID
-	if _, err = handler.repository.CreateAttachment(c.Request.Context(), postgres.AttachmentInput{
+	if _, err = handler.repository.CreateAttachment(ctx, postgres.AttachmentInput{
 		ID: attachmentID, FileName: fileName, FilePath: relativePath, FileSize: int64(len(data)), FileExt: extension,
 		MimeType: mimeType, Type: "file", CreatorID: current.User.ID, WorkspaceID: current.Workspace.ID,
 		PageID: &pageValue, SpaceID: &spaceValue,
 	}); err != nil {
-		_ = handler.storage.Delete(c.Request.Context(), relativePath)
+		_ = handler.storage.Delete(ctx, relativePath)
 		return "", err
 	}
 	return attachmentID, nil
@@ -311,7 +339,8 @@ func zipResourcePathForSource(pagePath, resource, source string) string {
 
 var (
 	notionPageIDSuffix    = regexp.MustCompile(`[ -]?[a-z0-9]{32}$`)
-	notionPartialIDSuffix = regexp.MustCompile(` [a-f0-9]{4}-[a-f0-9]{4}$`)
+	notionPartialIDSuffix = regexp.MustCompile(` ([a-f0-9]{4})-([a-f0-9]{4})$`)
+	notionFullIDSuffix    = regexp.MustCompile(`[a-z0-9]{32}$`)
 )
 
 func zipImportTitle(value, source string) string {
@@ -320,6 +349,53 @@ func zipImportTitle(value, source string) string {
 	}
 	value = notionPageIDSuffix.ReplaceAllString(value, "")
 	return strings.TrimSpace(notionPartialIDSuffix.ReplaceAllString(value, ""))
+}
+
+func isSingleZipRootDirectory(directory string, directories []string, entries []zipImportEntry) bool {
+	if zipPathDepth(directory) != 0 || len(directories) == 0 {
+		return false
+	}
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Path, directory+"/") {
+			return false
+		}
+	}
+	return len(entries) > 0
+}
+
+func mergeNotionFolderPages(entries *[]zipImportEntry, directories []string) {
+	if entries == nil || len(*entries) == 0 {
+		return
+	}
+	used := make(map[int]bool)
+	for _, directory := range directories {
+		folderName := pathpkg.Base(directory)
+		folderTitle := zipImportTitle(folderName, "notion")
+		parentDirectory := pathpkg.Dir(directory)
+		partialID, partialSuffix := "", ""
+		if match := notionPartialIDSuffix.FindStringSubmatch(folderName); len(match) == 3 {
+			partialID, partialSuffix = strings.ToLower(match[1]), strings.ToLower(match[2])
+		}
+		for index := range *entries {
+			entry := &(*entries)[index]
+			if used[index] || pathpkg.Dir(entry.Path) != parentDirectory {
+				continue
+			}
+			entryBase := strings.TrimSuffix(pathpkg.Base(entry.Path), filepath.Ext(entry.Path))
+			if zipImportTitle(entryBase, "notion") != folderTitle {
+				continue
+			}
+			if partialID != "" {
+				fullID := notionFullIDSuffix.FindString(entryBase)
+				if fullID == "" || !strings.HasPrefix(strings.ToLower(fullID), partialID) || !strings.HasSuffix(strings.ToLower(fullID), partialSuffix) {
+					continue
+				}
+			}
+			entry.Path = directory + ".md"
+			used[index] = true
+			break
+		}
+	}
 }
 
 func addZipParentDirectories(directories map[string]bool, directory string) {

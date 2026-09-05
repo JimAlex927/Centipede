@@ -50,9 +50,12 @@ export function getRealtimeWebSocketUrl(): string {
 }
 
 export function getCollaborationUrl(roomName?: string): string {
-  const baseUrl =
-    getConfigValue("COLLAB_URL") ||
-    (import.meta.env.DEV ? getBackendOrigin() : getAppUrl());
+  // Collaboration is served by Go at /collab.  A separately hosted preview
+  // or production frontend must not fall back to its own origin: that origin
+  // only serves static files and the Hocuspocus handshake then fails with a
+  // generic "real-time editor connection lost" message.  COLLAB_URL remains
+  // available for a dedicated websocket gateway.
+  const baseUrl = getConfigValue("COLLAB_URL") || getBackendOrigin();
 
   const collabUrl = new URL(
     roomName ? `/collab/${encodeURIComponent(roomName)}` : "/collab",

@@ -44,6 +44,35 @@ func TestZipImportTitleStripsNotionIDs(t *testing.T) {
 	}
 }
 
+func TestMergeNotionFolderPages(t *testing.T) {
+	entries := []zipImportEntry{{Path: "Project 0123456789abcdef0123456789abcdef.md"}}
+	mergeNotionFolderPages(&entries, []string{"Project"})
+	if entries[0].Path != "Project.md" {
+		t.Fatalf("Notion file was not associated with its folder page: %q", entries[0].Path)
+	}
+
+	entries = []zipImportEntry{{Path: "Project 0123456789abcdef0123456789abcdef.md"}}
+	mergeNotionFolderPages(&entries, []string{"Project 0123-cdef"})
+	if entries[0].Path != "Project 0123-cdef.md" {
+		t.Fatalf("Notion partial UUID folder was not matched: %q", entries[0].Path)
+	}
+
+	entries = []zipImportEntry{{Path: "Project ffffffffffffffffffffffffffffffff.md"}}
+	mergeNotionFolderPages(&entries, []string{"Project dead-beef"})
+	if entries[0].Path != "Project ffffffffffffffffffffffffffffffff.md" {
+		t.Fatalf("Notion partial UUID matched the wrong page: %q", entries[0].Path)
+	}
+}
+
+func TestSingleZipRootDirectory(t *testing.T) {
+	if !isSingleZipRootDirectory("export", []string{"export", "export/docs"}, []zipImportEntry{{Path: "export/page.md"}}) {
+		t.Fatal("single ZIP root directory was not detected")
+	}
+	if isSingleZipRootDirectory("export", []string{"export"}, []zipImportEntry{{Path: "page.md"}}) {
+		t.Fatal("root directory was incorrectly skipped when a root file exists")
+	}
+}
+
 func TestMarkdownImageImport(t *testing.T) {
 	nodes := markdownInline("before ![diagram](images/diagram.png) after")
 	if len(nodes) != 3 || nodes[1].Type != "image" || nodes[1].Attrs["src"] != "images/diagram.png" {
