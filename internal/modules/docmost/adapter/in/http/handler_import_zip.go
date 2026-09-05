@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -641,8 +642,88 @@ func confluenceDrawioPair(resourcePath string, assets map[string]*zip.File) (str
 		if assets[candidate] != nil {
 			return candidate, resourcePath, true
 		}
+		if candidate = confluenceNumericDrawioSourceSibling(resourcePath, assets); candidate != "" {
+			return candidate, resourcePath, true
+		}
+		return "", "", false
+	}
+	if confluenceDrawioSource(assets[resourcePath]) {
+		return resourcePath, confluenceDrawioPreview(resourcePath, assets), true
 	}
 	return "", "", false
+}
+
+func confluenceDrawioSource(file *zip.File) bool {
+	if file == nil || file.UncompressedSize64 == 0 || file.UncompressedSize64 > 2*1024*1024 {
+		return false
+	}
+	opened, err := file.Open()
+	if err != nil {
+		return false
+	}
+	defer opened.Close()
+	data, err := io.ReadAll(io.LimitReader(opened, 256*1024))
+	if err != nil {
+		return false
+	}
+	value := strings.ToLower(string(data))
+	return strings.Contains(value, "<mxfile") || strings.Contains(value, "<mxgraphmodel")
+}
+
+func confluenceDrawioPreview(drawioPath string, assets map[string]*zip.File) string {
+	for _, candidate := range []string{drawioPath + ".png", drawioPath + ".drawio.png"} {
+		if assets[candidate] != nil {
+			return candidate
+		}
+	}
+	return confluenceNumericPreviewSibling(drawioPath, assets)
+}
+
+func confluenceNumericPreviewSibling(resourcePath string, assets map[string]*zip.File) string {
+	directory := pathpkg.Dir(resourcePath)
+	previewID, hasPreviewID := confluenceNumericFileID(pathpkg.Base(resourcePath))
+	for candidate, file := range assets {
+		if pathpkg.Dir(candidate) != directory || !strings.EqualFold(filepath.Ext(candidate), ".png") || file == nil {
+			continue
+		}
+		candidateBase := pathpkg.Base(candidate)
+		candidateID, hasCandidateID := confluenceNumericFileID(candidateBase)
+		if hasPreviewID && hasCandidateID && absInt64(previewID-candidateID) <= 30 {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func confluenceNumericDrawioSourceSibling(resourcePath string, assets map[string]*zip.File) string {
+	directory := pathpkg.Dir(resourcePath)
+	previewID, hasPreviewID := confluenceNumericFileID(pathpkg.Base(resourcePath))
+	for candidate, file := range assets {
+		if pathpkg.Dir(candidate) != directory || filepath.Ext(candidate) != "" || file == nil || !confluenceDrawioSource(file) {
+			continue
+		}
+		drawioID, hasDrawioID := confluenceNumericFileID(pathpkg.Base(candidate))
+		if hasPreviewID && hasDrawioID && absInt64(previewID-drawioID) <= 30 {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func confluenceNumericFileID(name string) (int64, bool) {
+	name = strings.TrimSuffix(name, filepath.Ext(name))
+	if name == "" {
+		return 0, false
+	}
+	value, err := strconv.ParseInt(name, 10, 64)
+	return value, err == nil
+}
+
+func absInt64(value int64) int64 {
+	if value < 0 {
+		return -value
+	}
+	return value
 }
 
 func zipResourcePath(pagePath, resource string) string {

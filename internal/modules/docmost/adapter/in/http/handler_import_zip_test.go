@@ -148,6 +148,40 @@ func TestConfluenceDrawioPair(t *testing.T) {
 	}
 }
 
+func TestConfluenceDrawioPairDetectsNumericServerFiles(t *testing.T) {
+	var buffer bytes.Buffer
+	writer := zip.NewWriter(&buffer)
+	drawio, err := writer.Create("attachments/123/45678")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := drawio.Write([]byte("<?xml version=\"1.0\"?><mxfile><diagram/></mxfile>")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Create("attachments/123/45690.png"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := zip.NewReader(bytes.NewReader(buffer.Bytes()), int64(buffer.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assets := map[string]*zip.File{}
+	for _, file := range archive.File {
+		assets[file.Name] = file
+	}
+	gotDrawio, gotPNG, ok := confluenceDrawioPair("attachments/123/45678", assets)
+	if !ok || gotDrawio != "attachments/123/45678" || gotPNG != "attachments/123/45690.png" {
+		t.Fatalf("numeric Confluence Draw.io source was not detected: %q, %q, %v", gotDrawio, gotPNG, ok)
+	}
+	gotDrawio, gotPNG, ok = confluenceDrawioPair("attachments/123/45690.png", assets)
+	if !ok || gotDrawio != "attachments/123/45678" || gotPNG != "attachments/123/45690.png" {
+		t.Fatalf("numeric Confluence Draw.io preview was not paired: %q, %q, %v", gotDrawio, gotPNG, ok)
+	}
+}
+
 func TestBuildDrawioSVG(t *testing.T) {
 	value := buildDrawioSVG([]byte("<mxfile/>"), []byte("png"))
 	if !bytes.Contains(value, []byte(`content="PG14ZmlsZS8+"`)) || !bytes.Contains(value, []byte(`data:image/png;base64,cG5n`)) {
