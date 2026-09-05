@@ -29,6 +29,8 @@ func (handler *Handler) registerExtraRoutes(router gin.IRouter) {
 	router.POST("/comments/delete", handler.deleteComment)
 
 	router.POST("/labels", handler.labels)
+	router.POST("/labels/info", handler.labelInfo)
+	router.POST("/labels/pages", handler.labelPages)
 	router.POST("/pages/labels", handler.pageLabels)
 	router.POST("/pages/labels/add", handler.addPageLabels)
 	router.POST("/pages/labels/remove", handler.removePageLabel)
