@@ -31,7 +31,16 @@ services:
       DATABASE_MAX_CONNECTIONS: ${DATABASE_MAX_CONNECTIONS:-10}
       DATABASE_MIN_CONNECTIONS: ${DATABASE_MIN_CONNECTIONS:-2}
     entrypoint: ["/usr/local/bin/centipede-migrate"]
-    command: ["-dir", "/migrations"]
+    command: ["-dir", "/migrations/docmost"]
+    restart: "no"
+
+  storage-init:
+    image: alpine:3.22
+    volumes:
+      - centipede_storage:/data
+      - centipede_logs:/logs
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["mkdir -p /data/storage /logs && chown -R 65532:65532 /data /logs"]
     restart: "no"
 
   api:
@@ -41,6 +50,8 @@ services:
     image: centipede-api:local
     depends_on:
       migrate:
+        condition: service_completed_successfully
+      storage-init:
         condition: service_completed_successfully
     environment:
       APP_ENV: docker
