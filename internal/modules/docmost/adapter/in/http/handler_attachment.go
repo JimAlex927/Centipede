@@ -294,7 +294,12 @@ func (handler *Handler) pageAttachments(c *gin.Context) {
 func (handler *Handler) getFile(c *gin.Context) {
 	current := currentPrincipal(c)
 	attachment, err := handler.repository.AttachmentByID(c.Request.Context(), c.Param("fileId"), current.Workspace.ID)
-	if err != nil || attachment.PageID == nil || attachment.Type == nil || *attachment.Type != "file" || c.Param("fileName") != attachment.FileName {
+	// The file name is only part of the public URL shape. Docmost Node
+	// authorizes and resolves the attachment by fileId, without requiring the
+	// URL name to exactly match the persisted value. Keep the same behavior so
+	// historical content remains readable when a name was URL-encoded,
+	// sanitized, or changed during an import.
+	if err != nil || attachment.PageID == nil || attachment.Type == nil || *attachment.Type != "file" {
 		writeError(c, http.StatusNotFound, "File not found")
 		return
 	}
@@ -321,7 +326,10 @@ func (handler *Handler) getPublicFile(c *gin.Context) {
 		return
 	}
 	attachment, err := handler.repository.AttachmentByID(c.Request.Context(), fileID, claims.WorkspaceID)
-	if err != nil || attachment.PageID == nil || attachment.SpaceID == nil || attachment.Type == nil || *attachment.Type != "file" || claims.PageID != *attachment.PageID || c.Param("fileName") != attachment.FileName {
+	// The signed token and attachment ID are the authorization boundary. The
+	// filename is display data and may differ after import, sanitization, or URL
+	// encoding; requiring an exact match makes otherwise valid shared files 404.
+	if err != nil || attachment.PageID == nil || attachment.SpaceID == nil || attachment.Type == nil || *attachment.Type != "file" || claims.PageID != *attachment.PageID {
 		writeError(c, http.StatusNotFound, "File not found")
 		return
 	}
@@ -372,8 +380,19 @@ func (handler *Handler) serveAttachment(c *gin.Context, attachment domain.Attach
 		return
 	}
 	defer file.Close()
+	mimeType := ""
 	if attachment.MimeType != nil {
-		c.Header("Content-Type", *attachment.MimeType)
+		mimeType = strings.TrimSpace(*attachment.MimeType)
+	}
+	// Older Go uploads detected XML-based SVG files as text/xml. That MIME
+	// type is valid XML but is not treated as an image by browsers, so repair
+	// the response for existing Draw.io/Excalidraw SVG attachments as well as
+	// newly uploaded ones.
+	if isSVGExtension(attachment.FileExt) {
+		mimeType = "image/svg+xml"
+	}
+	if mimeType != "" {
+		c.Header("Content-Type", mimeType)
 	}
 	if public {
 		c.Header("Cache-Control", "public, max-age=86400")
@@ -538,10 +557,15 @@ func containsFold(items []string, target string) bool {
 }
 
 func inlineExtension(extension string) bool {
-	switch strings.ToLower(extension) {
-	case ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".pdf", ".txt", ".mp3", ".mp4", ".webm", ".ogg":
-		return true
-	default:
-		return false
+	extension = strings.ToLower(strings.TrimSpace(extension))
+	for _, suffix := range []string{".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".pdf", ".txt", ".mp3", ".mp4", ".webm", ".ogg"} {
+		if strings.HasSuffix(extension, suffix) {
+			return true
+		}
 	}
+	return false
+}
+
+func isSVGExtension(extension string) bool {
+	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(extension)), ".svg")
 }

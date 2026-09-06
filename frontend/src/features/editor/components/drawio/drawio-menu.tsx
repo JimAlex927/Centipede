@@ -28,7 +28,7 @@ import {
   IconZoomIn,
 } from "@tabler/icons-react";
 import { useTranslation } from "react-i18next";
-import { getDrawioUrl, getFileUrl } from "@/lib/config.ts";
+import { appendCacheBust, getAttachmentFileUrl, getDrawioUrl, getFileUrl } from "@/lib/config.ts";
 import { uploadFile } from "@/features/page/services/page-service.ts";
 import {
   DrawIoEmbed,
@@ -179,7 +179,7 @@ export function DrawioMenu({ editor }: EditorMenuProps) {
       }
 
       editor.commands.updateAttributes("drawio", {
-        src: `/api/files/${attachment.id}/${attachment.fileName}?t=${new Date(attachment.updatedAt).getTime()}`,
+        src: appendCacheBust(getAttachmentFileUrl(attachment), new Date(attachment.updatedAt).getTime()),
         title: attachment.fileName,
         size: attachment.fileSize,
         attachmentId: attachment.id,

@@ -10,7 +10,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { uploadFile } from "@/features/page/services/page-service.ts";
 import { useDisclosure } from "@mantine/hooks";
-import { getDrawioUrl } from "@/lib/config.ts";
+import { appendCacheBust, getAttachmentFileUrl, getDrawioUrl } from "@/lib/config.ts";
 import {
   DrawIoEmbed,
   DrawIoEmbedRef,
@@ -68,7 +68,7 @@ export default function DrawioView(props: NodeViewProps) {
 
       if (updateSrc) {
         updateAttributes({
-          src: `/api/files/${attachment.id}/${attachment.fileName}?t=${new Date(attachment.updatedAt).getTime()}`,
+          src: appendCacheBust(getAttachmentFileUrl(attachment), new Date(attachment.updatedAt).getTime()),
           title: attachment.fileName,
           size: attachment.fileSize,
           attachmentId: attachment.id,

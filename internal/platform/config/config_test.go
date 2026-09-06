@@ -49,8 +49,27 @@ func TestBuildConfigFromYAML(t *testing.T) {
 	if cfg.Migration.LegacyBaseURL != "http://localhost:3000" {
 		t.Fatalf("unexpected migration config: %#v", cfg.Migration)
 	}
+	if cfg.License.SigningSecret != cfg.Auth.JWTSecret {
+		t.Fatalf("license secret should fall back to JWT secret: %#v", cfg.License)
+	}
 	if cfg.PDFOCR.Timeout != 2*time.Minute || cfg.PDFOCR.MaxPages != 32 || cfg.PDFOCR.Language != "eng" {
 		t.Fatalf("unexpected default PDF OCR config: %#v", cfg.PDFOCR)
+	}
+}
+
+func TestLicenseSigningSecretCanBeSeparateFromJWT(t *testing.T) {
+	cfg, err := buildConfig([]byte(validConfigYAML+`
+license:
+  signing_secret: "dedicated-license-secret"
+`), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.License.SigningSecret != "dedicated-license-secret" {
+		t.Fatalf("unexpected dedicated license secret: %#v", cfg.License)
+	}
+	if cfg.License.SigningSecret == cfg.Auth.JWTSecret {
+		t.Fatal("dedicated license secret unexpectedly reused JWT secret")
 	}
 }
 

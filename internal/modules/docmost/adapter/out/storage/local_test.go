@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -30,6 +32,40 @@ func TestOversizedUploadPreservesExistingFile(t *testing.T) {
 	data, err := io.ReadAll(file)
 	if err != nil || string(data) != "original" {
 		t.Fatalf("original file changed: %q, %v", data, err)
+	}
+}
+
+func TestStorageReadsLegacyDataRootAndWritesCanonicalStorageRoot(t *testing.T) {
+	dataRoot := filepath.Join(t.TempDir(), "data")
+	canonicalRoot := filepath.Join(dataRoot, "storage")
+	legacyPath := filepath.Join(dataRoot, "workspace", "files", "legacy.txt")
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacyPath, []byte("legacy"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := NewLocal(canonicalRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := store.Open(context.Background(), "workspace/files/legacy.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := io.ReadAll(file)
+	_ = file.Close()
+	if err != nil || string(data) != "legacy" {
+		t.Fatalf("legacy file = %q, %v", data, err)
+	}
+
+	if _, err := store.Save(context.Background(), "workspace/files/new.txt", strings.NewReader("new"), 100); err != nil {
+		t.Fatal(err)
+	}
+	canonicalPath := filepath.Join(canonicalRoot, "workspace", "files", "new.txt")
+	if _, err := os.Stat(canonicalPath); err != nil {
+		t.Fatalf("canonical file was not created: %v", err)
 	}
 }
 

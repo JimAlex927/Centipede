@@ -9,7 +9,7 @@ import {
   getAttachmentInfo,
   uploadFile,
 } from "@/features/page/services/page-service.ts";
-import { getFileUrl } from "@/lib/config.ts";
+import { getAttachmentFileUrl, getFileUrl } from "@/lib/config.ts";
 
 const ATTACHMENT_NODE_TYPES = [
   "image",
@@ -203,10 +203,10 @@ async function reuploadPastedAttachments(
       newAttrs.attachmentId = result.id;
 
       if (newAttrs.src) {
-        newAttrs.src = `/api/files/${result.id}/${result.fileName}`;
+        newAttrs.src = getAttachmentFileUrl(result);
       }
       if (newAttrs.url) {
-        newAttrs.url = `/api/files/${result.id}/${result.fileName}`;
+        newAttrs.url = getAttachmentFileUrl(result);
       }
       if (pastedNode.nodeTypeName === "attachment") {
         newAttrs.name = result.fileName;

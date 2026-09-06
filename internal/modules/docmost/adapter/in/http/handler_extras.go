@@ -557,11 +557,30 @@ func (handler *Handler) createComment(c *gin.Context) {
 	if !handler.requireCommentAccess(c, page) {
 		return
 	}
-	comment, err := handler.repository.CreateComment(c.Request.Context(), current.Workspace.ID, current.User.ID, postgres.CommentInput{PageID: page.ID, Content: normalizeJSON(request.Content), Selection: request.Selection, Type: request.Type, ParentCommentID: request.ParentCommentID, SpaceID: page.SpaceID})
+	if request.ParentCommentID != nil {
+		parent, parentErr := handler.repository.CommentByID(c.Request.Context(), *request.ParentCommentID, current.Workspace.ID)
+		if parentErr != nil || parent.PageID != page.ID {
+			writeError(c, http.StatusBadRequest, "Parent comment not found")
+			return
+		}
+		if parent.ParentCommentID != nil {
+			writeError(c, http.StatusBadRequest, "You cannot reply to a reply")
+			return
+		}
+	}
+	selection := request.Selection
+	if selection != nil {
+		selection = truncateCommentSelection(*selection)
+	}
+	comment, err := handler.repository.CreateComment(c.Request.Context(), current.Workspace.ID, current.User.ID, postgres.CommentInput{PageID: page.ID, Content: normalizeJSON(request.Content), Selection: selection, Type: request.Type, ParentCommentID: request.ParentCommentID, SpaceID: page.SpaceID})
 	if err != nil {
 		writeError(c, http.StatusBadRequest, "Failed to create comment")
 		return
 	}
+	pageID := page.ID
+	_ = handler.repository.SetWatcher(c.Request.Context(), current.Workspace.ID, current.User.ID, page.SpaceID, &pageID, true)
+	commentNotifications, _ := handler.repository.CreateCommentNotifications(c.Request.Context(), comment, current.User.ID, nil, request.ParentCommentID == nil)
+	handler.publishCommentNotifications(commentNotifications, comment.WorkspaceID)
 	if handler.realtime != nil {
 		handler.realtime.PublishSpaceEvent(current.Workspace.ID, page.SpaceID, gin.H{
 			"operation": "commentCreated",
@@ -596,6 +615,8 @@ func (handler *Handler) updateComment(c *gin.Context) {
 		handler.writeRepositoryError(c, err, "Comment not found")
 		return
 	}
+	commentNotifications, _ := handler.repository.CreateCommentNotifications(c.Request.Context(), comment, current.User.ID, postgres.ExtractCommentUserMentionIDs(existing.Content), false)
+	handler.publishCommentNotifications(commentNotifications, comment.WorkspaceID)
 	if handler.realtime != nil {
 		if page, pageErr := handler.repository.PageByID(c.Request.Context(), comment.PageID, "", current.Workspace.ID, false); pageErr == nil {
 			handler.realtime.PublishSpaceEvent(current.Workspace.ID, page.SpaceID, gin.H{
@@ -634,6 +655,12 @@ func (handler *Handler) resolveComment(c *gin.Context) {
 	if err != nil {
 		writeError(c, http.StatusBadRequest, "Failed to resolve comment")
 		return
+	}
+	if request.Resolved {
+		resolvedNotification, _ := handler.repository.CreateResolvedCommentNotification(c.Request.Context(), comment, current.User.ID)
+		if resolvedNotification != nil {
+			handler.publishCommentNotifications([]postgres.CommentNotificationDelivery{*resolvedNotification}, comment.WorkspaceID)
+		}
 	}
 	if handler.realtime != nil {
 		handler.realtime.PublishSpaceEvent(current.Workspace.ID, page.SpaceID, gin.H{
@@ -705,6 +732,15 @@ func (handler *Handler) deleteComment(c *gin.Context) {
 		handler.writeRepositoryError(c, err, "Comment not found")
 		return
 	}
+	actorID := current.User.ID
+	resourceID := comment.ID
+	changes, _ := json.Marshal(map[string]any{"before": map[string]any{
+		"pageId": comment.PageID, "creatorId": comment.CreatorID,
+	}})
+	_ = handler.repository.RecordAudit(c.Request.Context(), postgres.AuditInput{
+		WorkspaceID: current.Workspace.ID, ActorID: &actorID, Event: "comment.deleted",
+		ResourceType: "comment", ResourceID: &resourceID, SpaceID: &spaceID, Changes: changes,
+	})
 	if handler.realtime != nil && spaceID != "" && commentErr == nil {
 		handler.realtime.PublishSpaceEvent(current.Workspace.ID, spaceID, gin.H{
 			"operation": "commentDeleted",
@@ -1024,12 +1060,16 @@ func (handler *Handler) revokeAllSessions(c *gin.Context) {
 }
 
 type searchRequest struct {
-	Query         string  `json:"query"`
-	SpaceID       *string `json:"spaceId"`
-	Limit         int     `json:"limit"`
-	IncludeUsers  *bool   `json:"includeUsers"`
-	IncludeGroups *bool   `json:"includeGroups"`
-	IncludePages  *bool   `json:"includePages"`
+	Query         string   `json:"query"`
+	SpaceID       *string  `json:"spaceId"`
+	CreatorID     *string  `json:"creatorId"`
+	LabelIDs      []string `json:"labelIds"`
+	TitleOnly     bool     `json:"titleOnly"`
+	Offset        int      `json:"offset"`
+	Limit         int      `json:"limit"`
+	IncludeUsers  *bool    `json:"includeUsers"`
+	IncludeGroups *bool    `json:"includeGroups"`
+	IncludePages  *bool    `json:"includePages"`
 }
 
 func (handler *Handler) searchAttachments(c *gin.Context) {
@@ -1055,7 +1095,9 @@ func (handler *Handler) search(c *gin.Context) {
 		return
 	}
 	current := currentPrincipal(c)
-	items, err := handler.repository.SearchPages(c.Request.Context(), current.Workspace.ID, request.Query, request.SpaceID, request.Limit, current.User.ID, isAdmin(current.User))
+	items, err := handler.repository.SearchPagesWithOptions(c.Request.Context(), current.Workspace.ID, request.Query, request.SpaceID, request.Limit, current.User.ID, isAdmin(current.User), postgres.PageSearchOptions{
+		CreatorID: request.CreatorID, LabelIDs: request.LabelIDs, TitleOnly: request.TitleOnly, Offset: request.Offset,
+	})
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, "Failed to search pages")
 		return
@@ -1091,4 +1133,13 @@ func normalizeJSON(value json.RawMessage) json.RawMessage {
 		}
 	}
 	return value
+}
+
+func truncateCommentSelection(value string) *string {
+	selection := []rune(value)
+	if len(selection) > 250 {
+		selection = selection[:250]
+	}
+	result := string(selection)
+	return &result
 }

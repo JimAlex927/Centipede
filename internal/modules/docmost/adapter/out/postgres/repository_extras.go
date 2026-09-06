@@ -469,6 +469,34 @@ func (repository *Repository) SetWatcher(ctx context.Context, workspaceID, userI
 	return err
 }
 
+// AddPageWatchers mirrors Docmost's collaboration history worker. Inserts are
+// intentionally no-op on conflict so a user's explicit page mute is not
+// silently removed by a later edit.
+func (repository *Repository) AddPageWatchers(ctx context.Context, userIDs []string, pageID, spaceID, workspaceID string) error {
+	seen := make(map[string]struct{}, len(userIDs))
+	for _, userID := range userIDs {
+		userID = strings.TrimSpace(userID)
+		if userID == "" {
+			continue
+		}
+		if _, ok := seen[userID]; ok {
+			continue
+		}
+		seen[userID] = struct{}{}
+		id, err := newUUID()
+		if err != nil {
+			return err
+		}
+		if _, err = repository.db.Exec(ctx, `
+INSERT INTO watchers (id, user_id, page_id, space_id, workspace_id, type, added_by_id)
+VALUES ($1, $2, $3, $4, $5, 'page', $2)
+ON CONFLICT DO NOTHING`, id, userID, pageID, spaceID, workspaceID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (repository *Repository) WatchStatus(ctx context.Context, workspaceID, userID, spaceID string, pageID *string) (bool, error) {
 	var watching bool
 	err := repository.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM watchers WHERE user_id = $1 AND workspace_id = $2 AND space_id = $3 AND (($4::uuid IS NULL AND page_id IS NULL) OR page_id = $4))`, userID, workspaceID, spaceID, pageID).Scan(&watching)
@@ -628,20 +656,52 @@ func (repository *Repository) ChangeSpaceMemberRole(ctx context.Context, spaceID
 	return err
 }
 
+type PageSearchOptions struct {
+	CreatorID *string
+	LabelIDs  []string
+	TitleOnly bool
+	Offset    int
+}
+
+// SearchPages keeps the original Go call shape for AI/MCP callers. HTTP
+// search uses SearchPagesWithOptions so the frontend's filters are preserved.
 func (repository *Repository) SearchPages(ctx context.Context, workspaceID, query string, spaceID *string, limit int, viewerID string, viewerAdmin bool) ([]domain.SearchPage, error) {
+	return repository.SearchPagesWithOptions(ctx, workspaceID, query, spaceID, limit, viewerID, viewerAdmin, PageSearchOptions{})
+}
+
+func (repository *Repository) SearchPagesWithOptions(ctx context.Context, workspaceID, query string, spaceID *string, limit int, viewerID string, viewerAdmin bool, options PageSearchOptions) ([]domain.SearchPage, error) {
 	query = strings.TrimSpace(query)
+	if options.Offset < 0 {
+		options.Offset = 0
+	}
+	if options.Offset > 100000 {
+		options.Offset = 100000
+	}
+	labelIDs := options.LabelIDs
+	if labelIDs == nil {
+		labelIDs = []string{}
+	}
+	if query == "" && options.CreatorID == nil && len(labelIDs) == 0 {
+		return []domain.SearchPage{}, nil
+	}
+	titleLikeQuery := strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_").Replace(query)
 	rows, err := repository.db.Query(ctx, `
 SELECT p.id::text, p.title, p.icon, p.parent_page_id::text, p.slug_id, p.creator_id::text,
  p.created_at, p.updated_at,
- CASE WHEN $2 = '' THEN 1::real ELSE similarity(COALESCE(p.title, ''), $2)::real END,
- CASE WHEN $2 = '' THEN '' ELSE ts_headline('simple', COALESCE(p.text_content, ''), plainto_tsquery('simple', $2)) END,
+ CASE WHEN $2 = '' OR $10 THEN 1::real ELSE similarity(COALESCE(p.title, ''), $2)::real END,
+ CASE WHEN $2 = '' OR $10 THEN '' ELSE ts_headline('simple', COALESCE(p.text_content, ''), plainto_tsquery('simple', $2)) END,
  s.id::text, s.name, s.slug
 FROM pages p JOIN spaces s ON s.id = p.space_id
 WHERE p.workspace_id = $1 AND p.deleted_at IS NULL AND ($3::uuid IS NULL OR p.space_id = $3)
   AND `+strings.NewReplacer("$8", "$5", "$9", "$6").Replace(pageListAccessSQL)+`
-  AND ($2 = '' OR COALESCE(p.title, '') ILIKE '%' || $2 || '%' OR COALESCE(p.text_content, '') ILIKE '%' || $2 || '%')
-ORDER BY CASE WHEN $2 = '' THEN p.updated_at END DESC, similarity(COALESCE(p.title, ''), $2) DESC
-LIMIT $4`, workspaceID, query, spaceID, normalizeLimit(limit), viewerID, viewerAdmin)
+  AND ($7::uuid IS NULL OR p.creator_id = $7)
+  AND (COALESCE(array_length($8::uuid[], 1), 0) = 0 OR EXISTS (
+    SELECT 1 FROM page_labels pl WHERE pl.page_id = p.id AND pl.label_id = ANY($8::uuid[])
+  ))
+  AND ($2 = '' OR ($10 AND COALESCE(p.title, '') ILIKE '%' || $11 || '%' ESCAPE E'\\')
+       OR (NOT $10 AND (COALESCE(p.title, '') ILIKE '%' || $2 || '%' OR COALESCE(p.text_content, '') ILIKE '%' || $2 || '%')))
+ORDER BY CASE WHEN $2 = '' OR $10 THEN p.updated_at END DESC, similarity(COALESCE(p.title, ''), $2) DESC
+LIMIT $4 OFFSET $9`, workspaceID, query, spaceID, normalizeLimit(limit), viewerID, viewerAdmin, options.CreatorID, labelIDs, options.Offset, options.TitleOnly, titleLikeQuery)
 	if err != nil {
 		return nil, err
 	}

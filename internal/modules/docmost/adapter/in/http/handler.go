@@ -21,24 +21,41 @@ import (
 const principalKey = "docmost_principal"
 
 type Handler struct {
-	repository     *postgres.Repository
-	tokens         *tokenService
-	cookieTTL      time.Duration
-	cookieSecure   bool
-	frontendURL    string
-	publicURL      string
-	legacyURL      string
-	aiProvider     *application.AIProvider
-	mailer         application.Mailer
-	storage        application.Storage
-	maxUpload      int64
-	pdfOCR         config.PDFOCRConfig
-	realtime       *RealtimeHandler
-	licenseService *enterprise.Service
+	repository            *postgres.Repository
+	tokens                *tokenService
+	cookieTTL             time.Duration
+	cookieSecure          bool
+	frontendURL           string
+	publicURL             string
+	legacyURL             string
+	aiProvider            *application.AIProvider
+	aiVectorDriver        string
+	mailer                application.Mailer
+	storage               application.Storage
+	maxUpload             int64
+	pdfOCR                config.PDFOCRConfig
+	realtime              *RealtimeHandler
+	licenseService        *enterprise.Service
+	notificationMailQueue chan string
 }
 
 func (handler *Handler) SetRealtimeHandler(realtime *RealtimeHandler) {
 	handler.realtime = realtime
+}
+
+// SetLicenseSigningSecret allows deployments to use a dedicated signing key
+// instead of sharing the authentication JWT secret. An empty value preserves
+// the backwards-compatible JWT-secret fallback initialized by NewHandler.
+func (handler *Handler) SetLicenseSigningSecret(secret string) {
+	if strings.TrimSpace(secret) != "" {
+		handler.licenseService = enterprise.NewLicenseService(secret)
+	}
+}
+
+// EnqueueNotificationEmail exposes the durable notification mail queue to the
+// collaboration adapter without coupling the two HTTP handlers together.
+func (handler *Handler) EnqueueNotificationEmail(notificationID string) {
+	handler.enqueueNotificationEmail(notificationID)
 }
 
 type principal struct {
@@ -53,7 +70,8 @@ func NewHandler(repository *postgres.Repository, secret string, cookieTTL time.D
 	handler := &Handler{
 		repository: repository, tokens: newTokenService(secret),
 		licenseService: enterprise.NewLicenseService(secret),
-		aiProvider:     application.NewAIProvider(aiConfig.BaseURL, aiConfig.APIKey, aiConfig.ChatModel, aiConfig.RequestTimeout),
+		aiProvider:     application.NewAIProviderWithModelsAndEmbedding(aiConfig.BaseURL, aiConfig.APIKey, aiConfig.CompletionModel, aiConfig.ChatModel, aiConfig.EmbeddingModel, aiConfig.RequestTimeout),
+		aiVectorDriver: strings.ToLower(strings.TrimSpace(aiConfig.VectorDriver)),
 		cookieTTL:      cookieTTL, cookieSecure: cookieSecure,
 		frontendURL: strings.TrimRight(frontendURL, "/"), publicURL: strings.TrimRight(publicURL, "/"), legacyURL: strings.TrimRight(legacyURL, "/"),
 		mailer: mailer, storage: storage, maxUpload: maxUpload, pdfOCR: pdfOCR,
@@ -66,6 +84,10 @@ func NewHandler(repository *postgres.Repository, secret string, cookieTTL time.D
 		defer cancel()
 		handler.ResumePendingAttachmentIndexes(ctx)
 	}()
+	handler.startTrashCleanup()
+	handler.startNotificationMailWorker()
+	handler.startPageVerificationNotifications()
+	handler.startAIEmbeddingWorker()
 	return handler
 }
 
@@ -283,6 +305,11 @@ func (handler *Handler) authenticate() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+		if claims.Type == "api_key" && workspaceSettingEnabled(workspace.Settings, "api", "restrictToAdmins") && !isAdmin(user) {
+			writeError(c, http.StatusForbidden, "API access is restricted to workspace administrators")
+			c.Abort()
+			return
+		}
 		current := principal{User: user, Workspace: workspace, SessionID: claims.SessionID, OAuthGrantID: claims.OAuthGrantID, OAuthScopes: oauthScopes}
 		c.Set(principalKey, current)
 		if required := requiredOAuthScope(c.Request.Method, c.FullPath()); current.OAuthGrantID != "" && !hasOAuthScope(current.OAuthScopes, required) {
@@ -402,6 +429,10 @@ func (handler *Handler) login(c *gin.Context) {
 	workspace, err := handler.repository.OnlyWorkspace(c.Request.Context())
 	if err != nil {
 		handler.writeRepositoryError(c, err, "Workspace not found")
+		return
+	}
+	if workspace.EnforceSSO {
+		writeError(c, http.StatusBadRequest, "This workspace has enforced SSO login.")
 		return
 	}
 	user, err := handler.repository.UserByEmail(c.Request.Context(), request.Email, workspace.ID)
@@ -540,8 +571,10 @@ func (handler *Handler) updateWorkspace(c *gin.Context) {
 		AllowPersonalSpaces  *bool           `json:"allowPersonalSpaces"`
 		IsSCIMEnabled        *bool           `json:"isScimEnabled"`
 		EnforceSSO           *bool           `json:"enforceSso"`
+		EmailDomains         *[]string       `json:"emailDomains"`
 		GenerativeAI         *bool           `json:"generativeAi"`
 		AISearch             *bool           `json:"aiSearch"`
+		AIChat               *bool           `json:"aiChat"`
 		MCPEnabled           *bool           `json:"mcpEnabled"`
 		EnforceMCPOAuth      *bool           `json:"enforceMcpOauth"`
 		AIChatReadOnly       *bool           `json:"aiChatReadOnly"`
@@ -571,10 +604,32 @@ func (handler *Handler) updateWorkspace(c *gin.Context) {
 	if request.EnforceSSO != nil && *request.EnforceSSO && !handler.requireFeature(c, "sso:custom") {
 		return
 	}
+	if request.EnforceSSO != nil && *request.EnforceSSO {
+		providers, err := handler.repository.EnabledAuthProviders(c.Request.Context(), current.Workspace.ID)
+		if err != nil {
+			writeError(c, http.StatusInternalServerError, "Failed to load authentication providers")
+			return
+		}
+		if len(providers) == 0 {
+			writeError(c, http.StatusBadRequest, "There must be at least one active SSO provider to enforce SSO")
+			return
+		}
+	}
+	if request.EmailDomains != nil && !handler.requireFeature(c, "sso:custom") {
+		return
+	}
+	var emailDomains *[]string
+	if request.EmailDomains != nil {
+		normalized := normalizeEmailDomains(*request.EmailDomains)
+		emailDomains = &normalized
+	}
 	if request.GenerativeAI != nil && *request.GenerativeAI && !handler.requireFeature(c, "ai") {
 		return
 	}
 	if request.AISearch != nil && *request.AISearch && !handler.requireFeature(c, "ai") {
+		return
+	}
+	if request.AIChat != nil && *request.AIChat && !handler.requireFeature(c, "ai") {
 		return
 	}
 	if request.MCPEnabled != nil && *request.MCPEnabled && !handler.requireFeature(c, "mcp") {
@@ -592,10 +647,10 @@ func (handler *Handler) updateWorkspace(c *gin.Context) {
 	if request.RestrictAPIAdmins != nil && !handler.requireFeature(c, "security:settings") {
 		return
 	}
-	if request.AllowMemberTemplates != nil && !handler.requireFeature(c, "security:settings") {
+	if request.AllowMemberTemplates != nil && !handler.requireFeature(c, "templates") {
 		return
 	}
-	if request.TrashRetentionDays != nil && !handler.requireFeature(c, "security:settings") {
+	if request.TrashRetentionDays != nil && !handler.requireFeature(c, "retention") {
 		return
 	}
 	if request.TrashRetentionDays != nil && *request.TrashRetentionDays < 1 {
@@ -604,6 +659,7 @@ func (handler *Handler) updateWorkspace(c *gin.Context) {
 	}
 	settings = setWorkspaceSetting(settings, request.GenerativeAI, "ai", "generative")
 	settings = setWorkspaceSetting(settings, request.AISearch, "ai", "search")
+	settings = setWorkspaceSetting(settings, request.AIChat, "ai", "chat")
 	settings = setWorkspaceSetting(settings, request.MCPEnabled, "ai", "mcp")
 	settings = setWorkspaceSetting(settings, request.EnforceMCPOAuth, "ai", "enforceMcpOauth")
 	settings = setWorkspaceSetting(settings, request.AIChatReadOnly, "ai", "chatReadOnly")
@@ -617,7 +673,7 @@ func (handler *Handler) updateWorkspace(c *gin.Context) {
 	workspace, err := handler.repository.UpdateWorkspace(c.Request.Context(), current.Workspace.ID, postgres.WorkspaceUpdate{
 		Name: request.Name, Description: request.Description, Logo: request.Logo,
 		Hostname: request.Hostname, Settings: settings, EnforceMFA: request.EnforceMFA, IsSCIMEnabled: request.IsSCIMEnabled, EnforceSSO: request.EnforceSSO,
-		TrashRetentionDays: request.TrashRetentionDays,
+		EmailDomains: emailDomains, TrashRetentionDays: request.TrashRetentionDays,
 	})
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, "Failed to update workspace")
@@ -723,7 +779,7 @@ func (handler *Handler) updateSpace(c *gin.Context) {
 	if !handler.requireSpaceRole(c, request.SpaceID, "admin") {
 		return
 	}
-	if request.DisablePublicSharing != nil && !handler.requireFeature(c, "security:settings") {
+	if request.DisablePublicSharing != nil && !handler.requireFeature(c, "sharing:controls") {
 		return
 	}
 	if request.AllowViewerComments != nil && !handler.requireFeature(c, "comment:viewer") {
@@ -766,6 +822,21 @@ func (handler *Handler) deleteSpace(c *gin.Context) {
 	current := currentPrincipal(c)
 	if !handler.requireSpaceRole(c, request.SpaceID, "admin") {
 		return
+	}
+	var attachmentPaths []string
+	var err error
+	if handler.storage != nil {
+		attachmentPaths, err = handler.repository.SpaceAttachmentPaths(c.Request.Context(), request.SpaceID, current.Workspace.ID)
+		if err != nil {
+			writeError(c, http.StatusInternalServerError, "Failed to prepare space attachments for deletion")
+			return
+		}
+		for _, path := range attachmentPaths {
+			if err := handler.storage.Delete(c.Request.Context(), path); err != nil {
+				writeError(c, http.StatusInternalServerError, "Failed to delete space attachments")
+				return
+			}
+		}
 	}
 	if err := handler.repository.DeleteSpace(c.Request.Context(), request.SpaceID, current.Workspace.ID); err != nil {
 		handler.writeRepositoryError(c, err, "Space not found")
@@ -840,6 +911,7 @@ func (handler *Handler) createPage(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, err.Error())
 		return
 	}
+	handler.EnqueueAIPageEmbedding(current.Workspace.ID, page.ID)
 	writeData(c, http.StatusOK, withPagePermissions(page))
 }
 
@@ -863,6 +935,7 @@ func (handler *Handler) updatePage(c *gin.Context) {
 		return
 	}
 	handler.notifyPageUpdated(c.Request.Context(), page, current.User.ID)
+	handler.EnqueueAIPageEmbedding(current.Workspace.ID, page.ID)
 	writeData(c, http.StatusOK, withPagePermissions(page))
 }
 
@@ -886,6 +959,22 @@ func (handler *Handler) deletePage(c *gin.Context) {
 	}
 	if existing.DeletedAt == nil && !handler.requirePageAccess(c, existing, true) {
 		return
+	}
+	var attachmentPaths []string
+	if request.Permanently && handler.storage != nil {
+		attachmentPaths, err = handler.repository.PageTreeAttachmentPaths(c.Request.Context(), request.PageID, current.Workspace.ID)
+		if err != nil {
+			writeError(c, http.StatusInternalServerError, "Failed to prepare page attachments for deletion")
+			return
+		}
+	}
+	if handler.storage != nil {
+		for _, path := range attachmentPaths {
+			if err := handler.storage.Delete(c.Request.Context(), path); err != nil {
+				writeError(c, http.StatusInternalServerError, "Failed to delete page attachments")
+				return
+			}
+		}
 	}
 	if err := handler.repository.DeletePage(c.Request.Context(), request.PageID, current.Workspace.ID, current.User.ID, request.Permanently); err != nil {
 		handler.writeRepositoryError(c, err, "Page not found")
@@ -1048,8 +1137,8 @@ func (handler *Handler) migrationStatus(c *gin.Context) {
 	legacyFallbackConfigured := handler.legacyURL != ""
 	writeData(c, http.StatusOK, gin.H{
 		"runtime": "go", "nodeRequired": legacyFallbackConfigured, "legacyFallbackConfigured": legacyFallbackConfigured,
-		"implemented": []string{"auth-core", "users", "workspace-core", "spaces-core", "pages-core", "groups-core", "comments-core", "search-core", "shared-page-search", "attachment-search", "enterprise-attachment-indexing", "shares-core", "shared-attachments", "local-attachments", "file-task-query", "notifications-core", "sessions", "page-history", "collaboration-core", "realtime-core", "transclusion-lookup", "transclusion-attachment-copy", "mail-delivery", "database-integration-validation", "docmost-schema-adoption", "page-access-core", "page-permissions-management", "single-page-export", "archive-export", "export-attachments", "docx-export", "docx-import", "pdf-text-import", "pdf-ocr-import", "markdown-html-import", "generic-zip-import", "zip-attachment-import", "notion-confluence-basic-import", "license", "api-keys", "audit-logs", "page-verification", "templates", "enterprise-mfa-core", "enterprise-personal-space-core", "enterprise-scim-token-management", "enterprise-scim-provisioning", "enterprise-sso-provider-management", "enterprise-sso-group-sync", "enterprise-bases-core", "enterprise-bases-filter-sort", "enterprise-bases-advanced-filters-references", "enterprise-ai-chat-persistence", "enterprise-ai-openai-compatible", "enterprise-ai-search-answer-core", "enterprise-ai-chat-tools", "enterprise-oauth", "enterprise-sso-login-callback", "enterprise-mcp-tools"},
-		"pending":     []string{"notion-confluence-full-import", "enterprise-billing"},
+		"implemented": []string{"auth-core", "users", "workspace-core", "spaces-core", "pages-core", "groups-core", "comments-core", "search-core", "shared-page-search", "attachment-search", "enterprise-attachment-indexing", "shares-core", "shared-attachments", "local-attachments", "file-task-query", "notifications-core", "sessions", "page-history", "collaboration-core", "realtime-core", "transclusion-lookup", "transclusion-attachment-copy", "mail-delivery", "database-integration-validation", "docmost-schema-adoption", "page-access-core", "page-permissions-management", "single-page-export", "archive-export", "export-attachments", "docx-export", "docx-import", "pdf-text-import", "pdf-ocr-import", "markdown-html-import", "generic-zip-import", "zip-attachment-import", "notion-confluence-full-import", "license", "api-keys", "audit-logs", "page-verification", "templates", "enterprise-mfa-core", "enterprise-personal-space-core", "enterprise-scim-token-management", "enterprise-scim-provisioning", "enterprise-sso-provider-management", "enterprise-sso-group-sync", "enterprise-bases-core", "enterprise-bases-filter-sort", "enterprise-bases-advanced-filters-references", "enterprise-ai-chat-persistence", "enterprise-ai-openai-compatible", "enterprise-ai-search-answer-core", "enterprise-ai-semantic-index", "enterprise-ai-chat-tools", "enterprise-oauth", "enterprise-sso-login-callback", "enterprise-mcp-tools"},
+		"pending":     []string{"enterprise-billing-cloud-only"},
 	})
 }
 
@@ -1122,6 +1211,16 @@ func currentPrincipal(c *gin.Context) principal {
 
 func isAdmin(user domain.User) bool {
 	return user.Role != nil && (*user.Role == "owner" || *user.Role == "admin")
+}
+
+func workspaceSettingEnabled(settings json.RawMessage, section, key string) bool {
+	var values map[string]map[string]any
+	if len(settings) == 0 || json.Unmarshal(settings, &values) != nil {
+		return false
+	}
+	value, ok := values[section][key]
+	enabled, ok := value.(bool)
+	return ok && enabled
 }
 
 func spacePermissions(role string) []domain.Permission {

@@ -138,7 +138,7 @@ func (handler *Handler) oidcCallback(c *gin.Context) {
 		if name == "" {
 			name = strings.TrimSpace(claims.PreferredName)
 		}
-		user, err = handler.repository.CreateSSOUser(c.Request.Context(), workspace.ID, provider.ID, claims.Subject, name, claims.Email, workspace.DefaultRole, provider.AllowSignup)
+		user, err = handler.repository.CreateSSOUser(c.Request.Context(), workspace.ID, provider.ID, claims.Subject, name, claims.Email, workspace.DefaultRole, provider.AllowSignup, handler.licenseSeatLimit(c.Request.Context(), workspace.ID))
 	} else if err != nil {
 		writeError(c, http.StatusInternalServerError, "Failed to load SSO account")
 		return
@@ -146,6 +146,8 @@ func (handler *Handler) oidcCallback(c *gin.Context) {
 	if err != nil {
 		if errors.Is(err, postgres.ErrNotFound) {
 			writeError(c, http.StatusForbidden, "SSO signup is disabled for this provider")
+		} else if errors.Is(err, postgres.ErrLicenseSeatsExceeded) {
+			writeError(c, http.StatusConflict, "The active license seat limit has been reached")
 		} else {
 			writeError(c, http.StatusInternalServerError, "Failed to create SSO account")
 		}

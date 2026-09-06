@@ -2,7 +2,7 @@ import { ReactNodeViewRenderer } from "@tiptap/react";
 import { Range, Node, mergeAttributes } from "@tiptap/core";
 import { ResizableNodeView } from "../resizable-nodeview";
 import type { ResizableNodeViewDirection } from "../resizable-nodeview";
-import { normalizeFileUrl } from "../media-utils";
+import { normalizeFileUrl, setAuthenticatedMediaSource } from "../media-utils";
 
 export type VideoResizeOptions = {
   enabled: boolean;
@@ -156,10 +156,13 @@ export const TiptapVideo = Node.create<VideoOptions>({
   },
 
   renderHTML({ HTMLAttributes }) {
+    const src = normalizeFileUrl(HTMLAttributes.src);
+    const attributes = { controls: "true", ...HTMLAttributes, src };
+
     return [
       "video",
-      { controls: "true", ...HTMLAttributes },
-      ["source", HTMLAttributes],
+      attributes,
+      ["source", { ...HTMLAttributes, src }],
     ];
   },
 
@@ -233,7 +236,7 @@ export const TiptapVideo = Node.create<VideoOptions>({
       }
 
       const el = document.createElement("video");
-      el.src = normalizeFileUrl(node.attrs.src);
+      setAuthenticatedMediaSource(el, node.attrs.src);
       el.controls = true;
       el.preload = "metadata";
       if (node.attrs.alt) {
@@ -280,7 +283,7 @@ export const TiptapVideo = Node.create<VideoOptions>({
           }
 
           if (updatedNode.attrs.src !== currentNode.attrs.src) {
-            el.src = normalizeFileUrl(updatedNode.attrs.src);
+            setAuthenticatedMediaSource(el, updatedNode.attrs.src);
           }
 
           if (updatedNode.attrs.alt !== currentNode.attrs.alt) {

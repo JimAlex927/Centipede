@@ -394,7 +394,30 @@ export function sanitizeUrl(url: string | undefined): string {
 export function isInternalFileUrl(url: string | undefined): boolean {
   if (!url) return false;
   const normalized = url.trim();
-  return normalized.startsWith("/api/files/") || normalized.startsWith("/files/");
+  if (!normalized) return false;
+
+  let pathname = normalized;
+  try {
+    // Attachment URLs can be absolute when the frontend and API are served
+    // separately. Only the path matters here; getFileUrl performs the actual
+    // origin/path conversion before the resource is rendered.
+    pathname = new URL(normalized, "http://localhost").pathname;
+  } catch {
+    return false;
+  }
+
+  // Accept the public API form, the old relative Go form, and both Node/Go
+  // storage layouts persisted by imported or pre-migration documents:
+  //   /api/files/<attachment>/<name>
+  //   /files/<attachment>/<name>
+  //   file/<workspace>/<attachment>/<name>
+  //   <workspace>/files/<attachment>/<name>
+  return (
+    /^\/api\/files\/[^/]+\/.+/.test(pathname) ||
+    /^\/files\/[^/]+\/.+/.test(pathname) ||
+    /^\/?file\/[^/]+\/(?:files\/)?[^/]+\/.+/.test(pathname) ||
+    /^\/?[^/]+\/files\/[^/]+\/.+/.test(pathname)
+  );
 }
 
 const alphabet = "abcdefghijklmnopqrstuvwxyz";

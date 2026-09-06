@@ -1,4 +1,4 @@
-import api from "@/lib/api-client.ts";
+import api, { unwrapApiData } from "@/lib/api-client.ts";
 import { getApiUrl } from "@/lib/config.ts";
 import type {
   AiChat,
@@ -53,9 +53,10 @@ export async function uploadChatFile(
   if (chatId) {
     formData.append("chatId", chatId);
   }
-  return await api.post("/ai/chats/upload", formData, {
+  const response = await api.post("/ai/chats/upload", formData, {
     headers: { "Content-Type": "multipart/form-data" },
   });
+  return unwrapApiData<ChatAttachment>(response);
 }
 
 export function sendChatMessage(

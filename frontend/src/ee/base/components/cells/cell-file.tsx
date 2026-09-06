@@ -9,7 +9,7 @@ import {
 import { IBaseProperty } from "@/ee/base/types/base.types";
 import cellClasses from "@/ee/base/styles/cells.module.css";
 import { uploadFile } from "@/features/page/services/page-service";
-import { getFileUrl } from "@/lib/config";
+import { getAttachmentFileUrl, getFileUrl } from "@/lib/config";
 
 export type FileValue = {
   id: string;
@@ -20,7 +20,7 @@ export type FileValue = {
 };
 
 function buildFileUrl(file: Pick<FileValue, "id" | "fileName" | "url">): string {
-  return file.url ?? `/api/files/${file.id}/${encodeURIComponent(file.fileName)}`;
+  return getAttachmentFileUrl(file);
 }
 
 type CellFileProps = {
@@ -87,7 +87,7 @@ export function CellFile({
             fileName: attachment.fileName,
             mimeType: attachment.mimeType,
             fileSize: attachment.fileSize,
-            url: `/api/files/${attachment.id}/${encodeURIComponent(attachment.fileName)}`,
+            url: getAttachmentFileUrl(attachment),
           });
         } catch (err) {
           console.error("File upload failed:", err);

@@ -126,6 +126,62 @@ func (repository *Repository) DeleteAttachment(ctx context.Context, attachmentID
 	return err
 }
 
+// PageTreeAttachmentPaths returns the physical paths owned by a page and all
+// of its descendants. It is used immediately before a permanent page delete,
+// because the database foreign key cascade cannot remove files from storage.
+func (repository *Repository) PageTreeAttachmentPaths(ctx context.Context, pageID, workspaceID string) ([]string, error) {
+	rows, err := repository.db.Query(ctx, `
+WITH RECURSIVE page_tree AS (
+  SELECT id, ARRAY[id] AS visited
+  FROM pages
+  WHERE id = $1 AND workspace_id = $2
+  UNION ALL
+  SELECT child.id, page_tree.visited || child.id
+  FROM pages child
+  JOIN page_tree ON child.parent_page_id = page_tree.id
+  WHERE child.workspace_id = $2 AND NOT child.id = ANY(page_tree.visited)
+)
+SELECT a.file_path
+FROM attachments a
+WHERE a.workspace_id = $2
+  AND a.page_id IN (SELECT id FROM page_tree)
+  AND a.file_path IS NOT NULL AND a.file_path <> ''`, pageID, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	paths := make([]string, 0)
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			return nil, err
+		}
+		paths = append(paths, path)
+	}
+	return paths, rows.Err()
+}
+
+func (repository *Repository) SpaceAttachmentPaths(ctx context.Context, spaceID, workspaceID string) ([]string, error) {
+	rows, err := repository.db.Query(ctx, `
+SELECT file_path
+FROM attachments
+WHERE space_id = $1 AND workspace_id = $2
+  AND file_path IS NOT NULL AND file_path <> ''`, spaceID, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	paths := make([]string, 0)
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			return nil, err
+		}
+		paths = append(paths, path)
+	}
+	return paths, rows.Err()
+}
+
 func (repository *Repository) PageAttachments(ctx context.Context, pageID, workspaceID string, limit int) (domain.Pagination[domain.Attachment], error) {
 	rows, err := repository.db.Query(ctx, `SELECT `+attachmentColumns+`, u.id::text, u.name, u.avatar_url
 FROM attachments a LEFT JOIN users u ON u.id = a.creator_id

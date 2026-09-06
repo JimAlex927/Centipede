@@ -123,6 +123,9 @@ func (handler *Handler) createTemplate(c *gin.Context) {
 		return
 	}
 	current := currentPrincipal(c)
+	if !handler.memberTemplatesAllowed(c, current) {
+		return
+	}
 	if request.SpaceID == nil || strings.TrimSpace(*request.SpaceID) == "" {
 		if !isAdmin(current.User) {
 			writeError(c, http.StatusForbidden, "Only workspace administrators can create global templates")
@@ -158,6 +161,9 @@ func (handler *Handler) updateTemplate(c *gin.Context) {
 	existing, err := handler.repository.TemplateByID(c.Request.Context(), request.TemplateID, current.Workspace.ID, current.User.ID, isAdmin(current.User), false)
 	if err != nil {
 		handler.writeRepositoryError(c, err, "Template not found")
+		return
+	}
+	if !handler.memberTemplatesAllowed(c, current) {
 		return
 	}
 	if !handler.templateCanWrite(c, existing) {
@@ -203,6 +209,9 @@ func (handler *Handler) deleteTemplate(c *gin.Context) {
 	template, err := handler.repository.TemplateByID(c.Request.Context(), request.TemplateID, current.Workspace.ID, current.User.ID, isAdmin(current.User), false)
 	if err != nil {
 		handler.writeRepositoryError(c, err, "Template not found")
+		return
+	}
+	if !handler.memberTemplatesAllowed(c, current) {
 		return
 	}
 	if !handler.templateCanWrite(c, template) {
@@ -260,6 +269,14 @@ func (handler *Handler) templateCanWrite(c *gin.Context, template domain.Templat
 		return true
 	}
 	return handler.requireSpaceRole(c, *template.SpaceID, "writer")
+}
+
+func (handler *Handler) memberTemplatesAllowed(c *gin.Context, current principal) bool {
+	if isAdmin(current.User) || workspaceSettingEnabled(current.Workspace.Settings, "templates", "allowMemberTemplates") {
+		return true
+	}
+	writeError(c, http.StatusForbidden, "Members are not allowed to create or manage templates")
+	return false
 }
 
 func normalizedStringPointer(value *string) *string {

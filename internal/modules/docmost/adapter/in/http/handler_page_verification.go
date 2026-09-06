@@ -240,6 +240,7 @@ func (handler *Handler) verifyPage(c *gin.Context) {
 		handler.writeRepositoryError(c, err, "Failed to verify page")
 		return
 	}
+	handler.notifyPageVerification(c.Request.Context(), page, current.User.ID, "page.verified", time.Now().UTC())
 	handler.publishPageVerificationEvent(current.Workspace.ID, page)
 	writeData(c, http.StatusOK, nil)
 }
@@ -257,6 +258,7 @@ func (handler *Handler) submitPageForApproval(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, "Page cannot be submitted for approval")
 		return
 	}
+	handler.notifyPageVerification(c.Request.Context(), page, current.User.ID, "page.approval_requested", time.Now().UTC())
 	handler.publishPageVerificationEvent(current.Workspace.ID, page)
 	writeData(c, http.StatusOK, nil)
 }
@@ -283,6 +285,7 @@ func (handler *Handler) rejectPageApproval(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, "Page cannot be rejected")
 		return
 	}
+	handler.notifyPageVerification(c.Request.Context(), page, current.User.ID, "page.approval_rejected", time.Now().UTC())
 	handler.publishPageVerificationEvent(current.Workspace.ID, page)
 	writeData(c, http.StatusOK, nil)
 }

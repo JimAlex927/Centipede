@@ -144,6 +144,43 @@ export function getFileUrl(src: string) {
   return sourceIsAbsolute ? sanitizeUrl(src) : sanitizeUrl(rawSrc);
 }
 
+export function getAttachmentFileUrl(attachment: {
+  id: string;
+  fileName: string;
+  url?: string;
+}): string {
+  const serverUrl = typeof attachment.url === "string" ? attachment.url.trim() : "";
+  if (serverUrl) return getFileUrl(serverUrl);
+
+  return getFileUrl(
+    `/api/files/${encodeURIComponent(attachment.id)}/${encodeURIComponent(attachment.fileName)}`,
+  );
+}
+
+export function appendCacheBust(src: string, value: string | number = Date.now()): string {
+  if (!src) return src;
+  const separator = src.includes("?") ? "&" : "?";
+  return `${src}${separator}t=${encodeURIComponent(String(value))}`;
+}
+
+// Protected file URLs are requested by media elements as well as by fetch.
+// When the frontend is served from another origin, tell the browser to send
+// the session cookie for the Go file endpoint. Do not apply this to external
+// media, otherwise their servers may reject the credentialed CORS request.
+export function getFileCrossOrigin(src: string): "use-credentials" | undefined {
+  const resolved = getFileUrl(src);
+  if (!resolved) return undefined;
+
+  try {
+    const parsed = new URL(resolved, getAppUrl());
+    return parsed.origin !== getAppUrl() && parsed.pathname.startsWith("/api/files/")
+      ? "use-credentials"
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function getFileUploadSizeLimit() {
   const limit = getConfigValue("FILE_UPLOAD_SIZE_LIMIT", "50mb");
   return bytes(limit);

@@ -65,6 +65,32 @@ WHERE id = $1 AND workspace_id = $2`, taskID, workspaceID, status, errorMessage)
 	return err
 }
 
+// ProcessingImportFileTasks returns import tasks that have a durable source
+// file and can be resumed by the Go worker after a process restart.
+func (repository *Repository) ProcessingImportFileTasks(ctx context.Context, limit int) ([]domain.FileTask, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 100
+	}
+	rows, err := repository.db.Query(ctx, `SELECT `+fileTaskColumns+`
+FROM file_tasks f
+WHERE f.type = 'import' AND f.status = 'processing'
+  AND f.file_path IS NOT NULL AND f.file_path <> '' AND f.deleted_at IS NULL
+ORDER BY f.created_at ASC, f.id ASC LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]domain.FileTask, 0)
+	for rows.Next() {
+		item, scanErr := scanFileTask(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func (repository *Repository) FileTasks(ctx context.Context, workspaceID, userID, cursor, beforeCursor string, limit int) (domain.Pagination[domain.FileTask], error) {
 	limit = normalizeLimit(limit)
 	args := []any{workspaceID, userID}

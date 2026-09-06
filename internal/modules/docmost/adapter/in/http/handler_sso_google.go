@@ -163,7 +163,7 @@ func (handler *Handler) googleCallback(c *gin.Context) {
 		if name == "" {
 			name = strings.TrimSpace(strings.TrimSpace(claims.GivenName) + " " + strings.TrimSpace(claims.FamilyName))
 		}
-		user, err = handler.repository.CreateSSOUser(c.Request.Context(), workspace.ID, provider.ID, claims.Subject, name, claims.Email, workspace.DefaultRole, provider.AllowSignup)
+		user, err = handler.repository.CreateSSOUser(c.Request.Context(), workspace.ID, provider.ID, claims.Subject, name, claims.Email, workspace.DefaultRole, provider.AllowSignup, handler.licenseSeatLimit(c.Request.Context(), workspace.ID))
 	} else if err != nil {
 		writeError(c, http.StatusInternalServerError, "Failed to load Google SSO account")
 		return
@@ -171,6 +171,8 @@ func (handler *Handler) googleCallback(c *gin.Context) {
 	if err != nil {
 		if errors.Is(err, postgres.ErrNotFound) {
 			writeError(c, http.StatusForbidden, "Google SSO signup is disabled for this provider")
+		} else if errors.Is(err, postgres.ErrLicenseSeatsExceeded) {
+			writeError(c, http.StatusConflict, "The active license seat limit has been reached")
 		} else {
 			writeError(c, http.StatusInternalServerError, "Failed to create Google SSO account")
 		}

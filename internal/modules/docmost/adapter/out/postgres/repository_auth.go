@@ -135,7 +135,7 @@ func (repository *Repository) RevokeInvitation(ctx context.Context, invitationID
 	return err
 }
 
-func (repository *Repository) AcceptInvitation(ctx context.Context, invitationID, token, name, passwordHash, workspaceID string) (domain.User, error) {
+func (repository *Repository) AcceptInvitation(ctx context.Context, invitationID, token, name, passwordHash, workspaceID string, seatLimit int64) (domain.User, error) {
 	tx, err := repository.db.Begin(ctx)
 	if err != nil {
 		return domain.User{}, err
@@ -144,13 +144,22 @@ func (repository *Repository) AcceptInvitation(ctx context.Context, invitationID
 
 	var email, role string
 	var groupIDs []string
+	var emailDomains []string
 	var invitedByID *string
-	err = tx.QueryRow(ctx, `SELECT COALESCE(email, ''), role, COALESCE(group_ids, '{}'::uuid[]), invited_by_id::text
-FROM workspace_invitations WHERE id = $1 AND workspace_id = $2 AND token = $3 FOR UPDATE`, invitationID, workspaceID, token).Scan(&email, &role, &groupIDs, &invitedByID)
+	err = tx.QueryRow(ctx, `SELECT COALESCE(i.email, ''), i.role, COALESCE(i.group_ids, '{}'::uuid[]), i.invited_by_id::text,
+COALESCE(w.email_domains, '{}'::varchar[])
+FROM workspace_invitations i JOIN workspaces w ON w.id = i.workspace_id
+WHERE i.id = $1 AND i.workspace_id = $2 AND i.token = $3 FOR UPDATE OF i`, invitationID, workspaceID, token).Scan(&email, &role, &groupIDs, &invitedByID, &emailDomains)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.User{}, ErrNotFound
 	}
 	if err != nil {
+		return domain.User{}, err
+	}
+	if !invitationEmailDomainAllowed(email, emailDomains) {
+		return domain.User{}, ErrEmailDomainNotAllowed
+	}
+	if err = lockWorkspaceSeat(ctx, tx, workspaceID, seatLimit); err != nil {
 		return domain.User{}, err
 	}
 	userID, err := newUUID()
@@ -185,6 +194,22 @@ SELECT $1, id FROM groups WHERE workspace_id = $2 AND id = ANY($3::uuid[]) AND d
 	return repository.UserByID(ctx, userID, workspaceID)
 }
 
+func invitationEmailDomainAllowed(email string, allowed []string) bool {
+	if len(allowed) == 0 {
+		return true
+	}
+	parts := strings.Split(strings.ToLower(strings.TrimSpace(email)), "@")
+	if len(parts) != 2 || parts[1] == "" {
+		return false
+	}
+	for _, domain := range allowed {
+		if strings.EqualFold(strings.TrimSpace(domain), parts[1]) {
+			return true
+		}
+	}
+	return false
+}
+
 func (repository *Repository) UserByAuthAccount(ctx context.Context, providerID, providerUserID, workspaceID string) (domain.User, error) {
 	return scanUser(repository.db.QueryRow(ctx, `
 SELECT u.id::text, u.name, u.email, u.email_verified_at, u.password, u.avatar_url, u.role,
@@ -209,7 +234,7 @@ VALUES ($1, $2, $3, $4, $5)`, accountID, userID, providerUserID, providerID, wor
 	return err
 }
 
-func (repository *Repository) CreateSSOUser(ctx context.Context, workspaceID, providerID, providerUserID, name, email, role string, allowSignup bool) (domain.User, error) {
+func (repository *Repository) CreateSSOUser(ctx context.Context, workspaceID, providerID, providerUserID, name, email, role string, allowSignup bool, seatLimit int64) (domain.User, error) {
 	email = strings.ToLower(strings.TrimSpace(email))
 	name = strings.TrimSpace(name)
 	if email == "" || !strings.Contains(email, "@") || providerID == "" || providerUserID == "" {
@@ -229,6 +254,9 @@ func (repository *Repository) CreateSSOUser(ctx context.Context, workspaceID, pr
 	if errors.Is(err, pgx.ErrNoRows) {
 		if !allowSignup {
 			return domain.User{}, ErrNotFound
+		}
+		if err = lockWorkspaceSeat(ctx, tx, workspaceID, seatLimit); err != nil {
+			return domain.User{}, err
 		}
 		userID, err = newUUID()
 		if err != nil {
@@ -267,6 +295,27 @@ SELECT $1, $2, id FROM groups WHERE workspace_id = $3 AND is_default = true AND 
 		return domain.User{}, err
 	}
 	return repository.UserByID(ctx, userID, workspaceID)
+}
+
+func lockWorkspaceSeat(ctx context.Context, tx pgx.Tx, workspaceID string, seatLimit int64) error {
+	if seatLimit <= 0 {
+		return nil
+	}
+	var workspaceIDValue string
+	if err := tx.QueryRow(ctx, `SELECT id::text FROM workspaces WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`, workspaceID).Scan(&workspaceIDValue); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	}
+	var activeCount int64
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM users WHERE workspace_id = $1 AND deleted_at IS NULL AND deactivated_at IS NULL`, workspaceID).Scan(&activeCount); err != nil {
+		return err
+	}
+	if activeCount >= seatLimit {
+		return ErrLicenseSeatsExceeded
+	}
+	return nil
 }
 
 // SyncSSOGroups makes the non-SCIM external group memberships for a user

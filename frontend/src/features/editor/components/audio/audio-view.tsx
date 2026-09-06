@@ -1,7 +1,7 @@
 import { NodeViewProps, NodeViewWrapper } from "@tiptap/react";
 import { Group, Loader, Text } from "@mantine/core";
 import { useMemo } from "react";
-import { getFileUrl } from "@/lib/config.ts";
+import { getFileCrossOrigin, getFileUrl } from "@/lib/config.ts";
 import { isInternalFileUrl } from "@docmost/editor-ext";
 import classes from "./audio-view.module.css";
 import { useTranslation } from "react-i18next";
@@ -36,6 +36,7 @@ export default function AudioView(props: NodeViewProps) {
             preload="metadata"
             controls
             src={safeSrc}
+            crossOrigin={getFileCrossOrigin(src)}
             aria-label={placeholder?.name || t("Audio")}
           />
         )}

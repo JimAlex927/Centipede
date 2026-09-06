@@ -2,6 +2,29 @@ import axios, { AxiosInstance } from "axios";
 import APP_ROUTE from "@/lib/app-route.ts";
 import { getBackendUrl, isCloud } from "@/lib/config.ts";
 
+type ApiEnvelope<T> = {
+  data: T;
+  success?: boolean;
+  status?: number;
+};
+
+/**
+ * Node's multipart handlers return a bare payload while the Go API uses the
+ * standard { data, success, status } envelope. Keep upload callers compatible
+ * with both backends during the migration.
+ */
+export function unwrapApiData<T>(value: T | ApiEnvelope<T>): T {
+  if (
+    value &&
+    typeof value === "object" &&
+    "success" in value &&
+    "data" in value
+  ) {
+    return (value as ApiEnvelope<T>).data;
+  }
+  return value as T;
+}
+
 const api: AxiosInstance = axios.create({
   baseURL: getBackendUrl(),
   withCredentials: true,

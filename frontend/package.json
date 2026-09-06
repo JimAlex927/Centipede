@@ -4,8 +4,9 @@
   "version": "0.95.0",
   "private": true,
   "scripts": {
-    "build": "tsc && vite build",
+    "build": "pnpm editor-ext:build && tsc && vite build",
     "dev": "vite",
+    "test": "vitest run",
     "preview": "vite preview",
     "editor-ext:build": "pnpm --dir packages/editor-ext build",
     "base-formula:build": "pnpm --dir packages/base-formula build"

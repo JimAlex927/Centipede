@@ -36,8 +36,12 @@ CREATE TEMP TABLE page_history(
   page_id uuid, slug_id text, title text, content jsonb, icon text, cover_photo text,
   last_updated_by_id uuid, contributor_ids uuid[], space_id uuid, workspace_id uuid
 );
+CREATE TEMP TABLE watchers(
+  id uuid, user_id uuid, page_id uuid, space_id uuid, workspace_id uuid,
+  type text, added_by_id uuid, UNIQUE(user_id, page_id)
+);
 INSERT INTO pages VALUES
- ('00000000-0000-0000-0000-000000000001', 'slug', 'Page', '{"type":"doc","content":[]}',
+ ('00000000-0000-0000-0000-000000000001', 'slug', 'Page', '{"type":"doc","content":[{"type":"paragraph"}]}',
   NULL, NULL, '00000000-0000-0000-0000-000000000011',
   '00000000-0000-0000-0000-000000000011',
   '00000000-0000-0000-0000-000000000003',
@@ -48,13 +52,22 @@ INSERT INTO pages VALUES
 
 	store := New(pool).CollaborationStore()
 	room := "page.00000000-0000-0000-0000-000000000001"
-	if version, err := store.SaveVersion(ctx, room, "auto"); err != nil || version != 1 {
+	store.AddContributor(room, "00000000-0000-0000-0000-000000000011")
+	if version, err := store.SaveVersion(ctx, room, "auto"); err != nil || version != 0 {
 		t.Fatalf("first collaboration version = %d, %v", version, err)
+	}
+	var watcherCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM watchers WHERE page_id = '00000000-0000-0000-0000-000000000001'`).Scan(&watcherCount); err != nil {
+		t.Fatal(err)
+	}
+	if watcherCount != 0 {
+		t.Fatalf("empty collaboration version added contributor watchers = %d, want 0", watcherCount)
 	}
 	if version, err := store.SaveVersion(ctx, room, "auto"); err != nil || version != 0 {
 		t.Fatalf("duplicate collaboration version = %d, %v", version, err)
 	}
-	if _, err := pool.Exec(ctx, `UPDATE pages SET content = '{"type":"doc","content":[{"type":"paragraph"}]}'::jsonb`); err != nil {
+	store.AddContributor(room, "00000000-0000-0000-0000-000000000011")
+	if _, err := pool.Exec(ctx, `UPDATE pages SET content = '{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"hello"}]}]}'::jsonb`); err != nil {
 		t.Fatal(err)
 	}
 	if version, err := store.SaveVersion(ctx, room, "auto"); err != nil || version != 1 {
@@ -153,6 +166,71 @@ VALUES ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-0000000
 	}
 	if targetID != "00000000-0000-0000-0000-000000000011" {
 		t.Fatalf("backlink sync resolved target %q", targetID)
+	}
+}
+
+func TestSyncTransclusionsIntegration(t *testing.T) {
+	url := os.Getenv("DOCMOST_TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("DOCMOST_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cfg, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		t.Fatal("invalid test database configuration")
+	}
+	cfg.MaxConns = 1
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if _, err := pool.Exec(ctx, `
+CREATE TEMP TABLE page_transclusions(
+  id uuid, workspace_id uuid, page_id uuid, transclusion_id text,
+  content jsonb, UNIQUE(page_id, transclusion_id)
+);
+CREATE TEMP TABLE page_transclusion_references(
+  id uuid, workspace_id uuid, reference_page_id uuid,
+  source_page_id uuid, transclusion_id text,
+  UNIQUE(reference_page_id, source_page_id, transclusion_id)
+);`); err != nil {
+		t.Fatal(err)
+	}
+	repository := New(pool)
+	pageID := "00000000-0000-0000-0000-000000000201"
+	workspaceID := "00000000-0000-0000-0000-000000000202"
+	content := []byte(`{"type":"doc","content":[
+{"type":"column","content":[{"type":"transclusionSource","attrs":{"id":"block-1"},"content":[{"type":"paragraph","content":[{"type":"text","text":"hello"}]}]}]},
+{"type":"transclusionReference","attrs":{"sourcePageId":"00000000-0000-0000-0000-000000000203","transclusionId":"block-1"}},
+{"type":"transclusionReference","attrs":{"sourcePageId":"00000000-0000-0000-0000-000000000203","transclusionId":"block-1"}}
+]}`)
+	if err := repository.SyncTransclusions(ctx, pageID, workspaceID, content); err != nil {
+		t.Fatal(err)
+	}
+	var transclusionCount, referenceCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM page_transclusions WHERE page_id = $1`, pageID).Scan(&transclusionCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM page_transclusion_references WHERE reference_page_id = $1`, pageID).Scan(&referenceCount); err != nil {
+		t.Fatal(err)
+	}
+	if transclusionCount != 1 || referenceCount != 1 {
+		t.Fatalf("transclusion indexes = %d sources, %d references; want 1, 1", transclusionCount, referenceCount)
+	}
+	updated := []byte(`{"type":"doc","content":[{"type":"transclusionSource","attrs":{"id":"block-2"},"content":[{"type":"paragraph"}]}]}`)
+	if err := repository.SyncTransclusions(ctx, pageID, workspaceID, updated); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM page_transclusions WHERE page_id = $1 AND transclusion_id = 'block-2'`, pageID).Scan(&transclusionCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM page_transclusion_references WHERE reference_page_id = $1`, pageID).Scan(&referenceCount); err != nil {
+		t.Fatal(err)
+	}
+	if transclusionCount != 1 || referenceCount != 0 {
+		t.Fatalf("updated transclusion indexes = %d sources, %d references; want 1, 0", transclusionCount, referenceCount)
 	}
 }
 

@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/url"
@@ -161,18 +162,30 @@ func (handler *Handler) acceptInvitation(c *gin.Context) {
 		handler.writeRepositoryError(c, err, "Workspace not found")
 		return
 	}
+	if workspace.EnforceSSO {
+		writeError(c, http.StatusBadRequest, "This workspace has enforced SSO login.")
+		return
+	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(request.Password), bcrypt.DefaultCost)
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, "Failed to secure password")
 		return
 	}
-	user, err := handler.repository.AcceptInvitation(c.Request.Context(), request.InvitationID, request.Token, strings.TrimSpace(request.Name), string(hash), workspace.ID)
+	user, err := handler.repository.AcceptInvitation(c.Request.Context(), request.InvitationID, request.Token, strings.TrimSpace(request.Name), string(hash), workspace.ID, handler.licenseSeatLimit(c.Request.Context(), workspace.ID))
 	if err != nil {
 		if errors.Is(err, postgres.ErrNotFound) {
 			writeError(c, http.StatusBadRequest, "Invalid invitation or token")
+		} else if errors.Is(err, postgres.ErrEmailDomainNotAllowed) {
+			writeError(c, http.StatusBadRequest, "The invitation email domain is not approved for this workspace")
+		} else if errors.Is(err, postgres.ErrLicenseSeatsExceeded) {
+			writeError(c, http.StatusConflict, "The active license seat limit has been reached")
 		} else {
 			writeError(c, http.StatusBadRequest, "Failed to accept invitation")
 		}
+		return
+	}
+	if workspace.EnforceMFA {
+		writeData(c, http.StatusOK, gin.H{"requiresLogin": true})
 		return
 	}
 	if err := handler.startSession(c, user); err != nil {
@@ -229,6 +242,10 @@ func (handler *Handler) forgotPassword(c *gin.Context) {
 	if err != nil {
 		// Do not disclose whether the workspace or account exists.
 		writeData(c, http.StatusOK, nil)
+		return
+	}
+	if workspace.EnforceSSO {
+		writeError(c, http.StatusBadRequest, "This workspace has enforced SSO login.")
 		return
 	}
 	user, err := handler.repository.UserByEmail(c.Request.Context(), request.Email, workspace.ID)
@@ -302,11 +319,36 @@ func (handler *Handler) passwordReset(c *gin.Context) {
 		}
 		return
 	}
+	requiresMFA, mfaErr := handler.userRequiresMFA(c.Request.Context(), user.ID, workspace)
+	if mfaErr != nil {
+		writeError(c, http.StatusInternalServerError, "Failed to load MFA settings")
+		return
+	}
+	if requiresMFA {
+		writeData(c, http.StatusOK, gin.H{"requiresLogin": true})
+		return
+	}
 	if err := handler.startSession(c, user); err != nil {
 		writeError(c, http.StatusInternalServerError, "Failed to create login session")
 		return
 	}
 	writeData(c, http.StatusOK, gin.H{"requiresLogin": false})
+}
+
+func (handler *Handler) userRequiresMFA(ctx context.Context, userID string, workspace domain.Workspace) (bool, error) {
+	record, err := handler.repository.MFAByUser(ctx, userID, workspace.ID)
+	if err != nil && !errors.Is(err, postgres.ErrNotFound) {
+		return false, err
+	}
+	return mfaRequired(record, err, workspace.EnforceMFA), nil
+}
+
+func mfaRequired(record postgres.MFARecord, lookupErr error, workspaceEnforces bool) bool {
+	if lookupErr != nil && !errors.Is(lookupErr, postgres.ErrNotFound) {
+		return false
+	}
+	return (lookupErr == nil && record.IsEnabled) ||
+		(workspaceEnforces && (errors.Is(lookupErr, postgres.ErrNotFound) || !record.IsEnabled))
 }
 
 func (handler *Handler) publicFrontendURL(c *gin.Context) string {

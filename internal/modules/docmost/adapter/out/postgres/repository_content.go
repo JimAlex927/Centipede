@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -152,6 +153,16 @@ VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $9, $10, $11)`,
 	if err = tx.Commit(ctx); err != nil {
 		return domain.Page{}, nil, err
 	}
+	// Duplication writes the whole tree in one transaction and therefore does
+	// not pass through CreatePage. Rebuild derived indexes for every copied
+	// page before returning so backlinks and transclusion lookups work
+	// immediately, even before the first collaboration session opens.
+	for _, source := range pages {
+		newID := idMap[source.ID]
+		content := remapDuplicatedContent(source.Content, idMap, slugMap)
+		_ = repository.SyncBacklinks(ctx, newID, workspaceID, content)
+		_ = repository.SyncTransclusions(ctx, newID, workspaceID, content)
+	}
 	result, err := repository.PageByID(ctx, idMap[root.ID], "", workspaceID, false)
 	return result, childIDs, err
 }
@@ -266,6 +277,129 @@ ON CONFLICT (source_page_id, target_page_id) DO NOTHING`, pageID, workspaceID, t
 		}
 	}
 	return tx.Commit(ctx)
+}
+
+// SyncTransclusions rebuilds the two derived transclusion indexes for a page.
+// Docmost refreshes these indexes after every collaboration persistence flush;
+// keeping the same operation in the Go repository makes references created by
+// the editor immediately discoverable after a Node-to-Go migration.
+func (repository *Repository) SyncTransclusions(ctx context.Context, pageID, workspaceID string, content json.RawMessage) error {
+	snapshots, references := collectTransclusionIndexes(content)
+	tx, err := repository.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err = tx.Exec(ctx, `
+DELETE FROM page_transclusions
+WHERE page_id = $1 AND workspace_id = $2`, pageID, workspaceID); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `
+DELETE FROM page_transclusion_references
+WHERE reference_page_id = $1 AND workspace_id = $2`, pageID, workspaceID); err != nil {
+		return err
+	}
+
+	transclusionIDs := make([]string, 0, len(snapshots))
+	for id := range snapshots {
+		transclusionIDs = append(transclusionIDs, id)
+	}
+	sort.Strings(transclusionIDs)
+	for _, transclusionID := range transclusionIDs {
+		id, uuidErr := newUUID()
+		if uuidErr != nil {
+			return uuidErr
+		}
+		if _, err = tx.Exec(ctx, `
+INSERT INTO page_transclusions
+  (id, workspace_id, page_id, transclusion_id, content)
+VALUES ($1, $2, $3, $4, $5::jsonb)`, id, workspaceID, pageID, transclusionID, snapshots[transclusionID]); err != nil {
+			return err
+		}
+	}
+
+	for _, reference := range references {
+		// The source page column is UUID in the Docmost schema. Ignore a
+		// transient malformed editor node instead of making an otherwise valid
+		// page save fail while the user is still editing it.
+		if !looksLikeUUID(reference.SourcePageID) {
+			continue
+		}
+		id, uuidErr := newUUID()
+		if uuidErr != nil {
+			return uuidErr
+		}
+		if _, err = tx.Exec(ctx, `
+INSERT INTO page_transclusion_references
+  (id, workspace_id, reference_page_id, source_page_id, transclusion_id)
+VALUES ($1, $2, $3, $4, $5)`, id, workspaceID, pageID, reference.SourcePageID, reference.TransclusionID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+type transclusionIndexReference struct {
+	SourcePageID   string
+	TransclusionID string
+}
+
+func collectTransclusionIndexes(content json.RawMessage) (map[string]json.RawMessage, []transclusionIndexReference) {
+	var root any
+	if json.Unmarshal(content, &root) != nil {
+		return map[string]json.RawMessage{}, nil
+	}
+	snapshots := make(map[string]json.RawMessage)
+	references := make([]transclusionIndexReference, 0)
+	seenReferences := make(map[string]struct{})
+	var walk func(any)
+	walk = func(value any) {
+		node, ok := value.(map[string]any)
+		if !ok {
+			return
+		}
+		nodeType, _ := node["type"].(string)
+		attrs, _ := node["attrs"].(map[string]any)
+		switch nodeType {
+		case "transclusionSource":
+			transclusionID, _ := attrs["id"].(string)
+			if transclusionID != "" {
+				children, _ := node["content"].([]any)
+				if children == nil {
+					children = []any{}
+				}
+				snapshot, marshalErr := json.Marshal(map[string]any{
+					"type": "doc", "content": children,
+				})
+				if marshalErr == nil {
+					// Later occurrences win, matching the upstream collector.
+					snapshots[transclusionID] = snapshot
+				}
+			}
+			return
+		case "transclusionReference":
+			sourcePageID, _ := attrs["sourcePageId"].(string)
+			transclusionID, _ := attrs["transclusionId"].(string)
+			if sourcePageID != "" && transclusionID != "" {
+				key := sourcePageID + "::" + transclusionID
+				if _, exists := seenReferences[key]; !exists {
+					seenReferences[key] = struct{}{}
+					references = append(references, transclusionIndexReference{
+						SourcePageID: sourcePageID, TransclusionID: transclusionID,
+					})
+				}
+			}
+			return
+		}
+		children, _ := node["content"].([]any)
+		for _, child := range children {
+			walk(child)
+		}
+	}
+	walk(root)
+	return snapshots, references
 }
 
 func backlinkTargets(content json.RawMessage, sourcePageID string) ([]string, []string) {

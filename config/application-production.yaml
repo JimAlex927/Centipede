@@ -22,6 +22,11 @@ auth:
   refresh_cookie: "centipede_refresh"
   cookie_secure: true
 
+license:
+  # Set this separately from auth.jwt_secret and use the same value with
+  # cmd/license when issuing self-hosted licenses.
+  signing_secret: ""
+
 mail:
   from: ""
   host: ""
@@ -31,8 +36,19 @@ mail:
   tls_mode: "starttls"
 
 storage:
-  data_dir: "./data"
+  # Match Docmost Node's local storage layout.
+  data_dir: "./data/storage"
   max_upload_bytes: 104857600
+
+# Optional OpenAI-compatible AI provider. Set embedding_model to enable the
+# asynchronous semantic index; keyword search remains the fallback.
+# ai:
+#   base_url: "https://api.openai.com/v1"
+#   chat_model: "gpt-4o-mini"
+#   completion_model: "gpt-4o-mini"
+#   embedding_model: "text-embedding-3-small"
+#   vector_driver: "postgres"
+#   timeout: "60s"
 
 # Optional scanned-PDF OCR. Leave both command paths empty to keep OCR disabled.
 # pdf_ocr:

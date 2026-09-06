@@ -18,8 +18,10 @@ import (
 )
 
 var (
-	ErrNotFound     = errors.New("docmost entity not found")
-	ErrInvalidInput = errors.New("invalid docmost input")
+	ErrNotFound              = errors.New("docmost entity not found")
+	ErrInvalidInput          = errors.New("invalid docmost input")
+	ErrEmailDomainNotAllowed = errors.New("invitation email domain is not allowed")
+	ErrLicenseSeatsExceeded  = errors.New("license seat limit exceeded")
 )
 
 type Repository struct {
@@ -267,6 +269,7 @@ type WorkspaceUpdate struct {
 	EnforceMFA         *bool
 	IsSCIMEnabled      *bool
 	EnforceSSO         *bool
+	EmailDomains       *[]string
 	TrashRetentionDays *int
 }
 
@@ -277,8 +280,9 @@ UPDATE workspaces SET
   logo = COALESCE($4, logo), hostname = COALESCE($5, hostname),
   settings = COALESCE($6::jsonb, settings), enforce_mfa = COALESCE($7, enforce_mfa),
   is_scim_enabled = COALESCE($8, is_scim_enabled), enforce_sso = COALESCE($9, enforce_sso),
-  trash_retention_days = COALESCE($10, trash_retention_days), updated_at = now()
-WHERE id = $1 AND deleted_at IS NULL`, workspaceID, input.Name, input.Description, input.Logo, input.Hostname, nullableJSON(input.Settings), input.EnforceMFA, input.IsSCIMEnabled, input.EnforceSSO, input.TrashRetentionDays)
+	email_domains = COALESCE($10::varchar[], email_domains),
+	trash_retention_days = COALESCE($11, trash_retention_days), updated_at = now()
+WHERE id = $1 AND deleted_at IS NULL`, workspaceID, input.Name, input.Description, input.Logo, input.Hostname, nullableJSON(input.Settings), input.EnforceMFA, input.IsSCIMEnabled, input.EnforceSSO, nullableStringArray(input.EmailDomains), input.TrashRetentionDays)
 	if err != nil {
 		return domain.Workspace{}, err
 	}
@@ -573,6 +577,11 @@ VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $10, $11, $12)`,
 	// Backlinks are derived data and should also be initialized for imported or
 	// API-created pages that do not pass through the collaboration server.
 	_ = repository.SyncBacklinks(ctx, id, workspaceID, content)
+	_ = repository.SyncTransclusions(ctx, id, workspaceID, content)
+	// Keep page creators subscribed to updates across every creation path
+	// (REST, import, templates, MCP, and AI tools). The insert is best-effort,
+	// matching the upstream asynchronous watcher job.
+	_ = repository.AddPageWatchers(ctx, []string{userID}, id, *input.SpaceID, workspaceID)
 	return repository.PageByID(ctx, id, "", workspaceID, false)
 }
 
@@ -611,8 +620,18 @@ WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`, id, workspaceID, us
 		// intentionally best-effort because backlinks are rebuildable derived
 		// data and must not make the page mutation appear to have failed.
 		_ = repository.SyncBacklinks(ctx, id, workspaceID, input.Content)
+		_ = repository.SyncTransclusions(ctx, id, workspaceID, input.Content)
 	}
-	return repository.PageByID(ctx, id, "", workspaceID, false)
+	// A direct REST/import/MCP update does not pass through the Yjs
+	// collaboration contributor tracker, so subscribe the editor here too.
+	updated, err := repository.PageByID(ctx, id, "", workspaceID, false)
+	if err != nil {
+		return domain.Page{}, err
+	}
+	if userID != "" {
+		_ = repository.AddPageWatchers(ctx, []string{userID}, id, updated.SpaceID, workspaceID)
+	}
+	return updated, nil
 }
 
 func (repository *Repository) DeletePage(ctx context.Context, id, workspaceID, userID string, permanent bool) error {
@@ -627,6 +646,44 @@ func (repository *Repository) DeletePage(ctx context.Context, id, workspaceID, u
 		return ErrNotFound
 	}
 	return err
+}
+
+// ExpiredTrashPageIDs returns pages whose workspace retention period has
+// elapsed. The caller deletes each returned tree and its storage files.
+func (repository *Repository) ExpiredTrashPageIDs(ctx context.Context, limit int) ([]string, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	rows, err := repository.db.Query(ctx, `
+SELECT p.id::text
+FROM pages p
+JOIN workspaces w ON w.id = p.workspace_id AND w.deleted_at IS NULL
+WHERE p.deleted_at IS NOT NULL
+  AND p.deleted_at < now() - (COALESCE(w.trash_retention_days, 30)::text || ' days')::interval
+ORDER BY p.deleted_at ASC, p.id ASC
+LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	pageIDs := make([]string, 0, limit)
+	for rows.Next() {
+		var pageID string
+		if err := rows.Scan(&pageID); err != nil {
+			return nil, err
+		}
+		pageIDs = append(pageIDs, pageID)
+	}
+	return pageIDs, rows.Err()
+}
+
+func (repository *Repository) PageWorkspaceID(ctx context.Context, pageID string) (string, error) {
+	var workspaceID string
+	err := repository.db.QueryRow(ctx, `SELECT workspace_id::text FROM pages WHERE id = $1`, pageID).Scan(&workspaceID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	return workspaceID, err
 }
 
 type pgconnCommandTag interface {
@@ -746,6 +803,13 @@ func nullableJSON(value json.RawMessage) any {
 		return nil
 	}
 	return value
+}
+
+func nullableStringArray(value *[]string) any {
+	if value == nil {
+		return nil
+	}
+	return *value
 }
 
 func jsonTextContent(raw json.RawMessage) string {

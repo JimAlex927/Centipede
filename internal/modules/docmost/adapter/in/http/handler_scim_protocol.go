@@ -215,8 +215,12 @@ func (handler *Handler) scimUserCreate(c *gin.Context) {
 	item, err := handler.repository.CreateSCIMUser(c.Request.Context(), workspace.ID, postgres.SCIMUserInput{
 		ExternalID: payload.ExternalID, UserName: payload.UserName, DisplayName: scimDisplayName(payload),
 		GivenName: payload.Name.GivenName, FamilyName: payload.Name.FamilyName, Active: payload.Active,
-	})
+	}, handler.licenseSeatLimit(c.Request.Context(), workspace.ID))
 	if err != nil {
+		if errors.Is(err, postgres.ErrLicenseSeatsExceeded) {
+			scimError(c, http.StatusConflict, "The active license seat limit has been reached")
+			return
+		}
 		scimError(c, http.StatusConflict, "A SCIM user with this userName or externalId already exists")
 		return
 	}
@@ -254,8 +258,12 @@ func (handler *Handler) scimUserUpdate(c *gin.Context) {
 	item, err := handler.repository.UpdateSCIMUser(c.Request.Context(), c.Param("id"), workspace.ID, postgres.SCIMUserInput{
 		ExternalID: payload.ExternalID, UserName: userName, DisplayName: displayName, GivenName: payload.Name.GivenName,
 		FamilyName: payload.Name.FamilyName, Active: active,
-	})
+	}, handler.licenseSeatLimit(c.Request.Context(), workspace.ID))
 	if err != nil {
+		if errors.Is(err, postgres.ErrLicenseSeatsExceeded) {
+			scimError(c, http.StatusConflict, "The active license seat limit has been reached")
+			return
+		}
 		scimError(c, http.StatusConflict, "Failed to update SCIM user")
 		return
 	}
@@ -284,8 +292,12 @@ func (handler *Handler) scimUserPatch(c *gin.Context) {
 			return
 		}
 	}
-	item, err := handler.repository.UpdateSCIMUser(c.Request.Context(), c.Param("id"), workspace.ID, input)
+	item, err := handler.repository.UpdateSCIMUser(c.Request.Context(), c.Param("id"), workspace.ID, input, handler.licenseSeatLimit(c.Request.Context(), workspace.ID))
 	if err != nil {
+		if errors.Is(err, postgres.ErrLicenseSeatsExceeded) {
+			scimError(c, http.StatusConflict, "The active license seat limit has been reached")
+			return
+		}
 		scimError(c, http.StatusConflict, "Failed to patch SCIM user")
 		return
 	}

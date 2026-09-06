@@ -1,7 +1,9 @@
 package httpapi
 
 import (
+	"context"
 	"net/http"
+	"strings"
 	"time"
 
 	docmosthttp "centipede/internal/modules/docmost/adapter/in/http"
@@ -65,6 +67,12 @@ func NewRouter(cfg config.Config, database *pgxpool.Pool, logger *zap.Logger) ht
 		cfg.AI,
 		cfg.PDFOCR,
 	)
+	docmostHandler.SetLicenseSigningSecret(cfg.License.SigningSecret)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		docmostHandler.ResumePendingZipImports(ctx)
+	}()
 	collaborationHandler := docmosthttp.NewCollaborationHandler(docmostRepository, cfg.Auth.JWTSecret, allowedOrigins)
 	engine.Any("/collab/:room", gin.WrapH(collaborationHandler))
 	engine.GET("/api/collab/stats", func(c *gin.Context) {
@@ -74,6 +82,8 @@ func NewRouter(cfg config.Config, database *pgxpool.Pool, logger *zap.Logger) ht
 	realtimeHandler := docmosthttp.NewRealtimeHandler(docmostRepository, cfg.Auth.JWTSecret, allowedOrigins)
 	docmostHandler.SetRealtimeHandler(realtimeHandler)
 	collaborationHandler.SetRealtimeHandler(realtimeHandler)
+	collaborationHandler.SetNotificationEmailEnqueuer(docmostHandler.EnqueueNotificationEmail)
+	collaborationHandler.SetAIEmbeddingEnqueuer(docmostHandler.EnqueueAIPageEmbedding)
 	engine.GET("/realtime", gin.WrapH(realtimeHandler))
 	docmostHandler.Register(engine)
 	if cfg.Migration.LegacyBaseURL != "" {
@@ -135,7 +145,15 @@ func requestLogger(logger *zap.Logger) gin.HandlerFunc {
 func securityHeaders() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Header("X-Content-Type-Options", "nosniff")
-		c.Header("X-Frame-Options", "DENY")
+		// Match Docmost's frame policy: public share pages and already
+		// authorized attachment responses may be embedded by the editor or an
+		// external knowledge-base page. The attachment handler also removes
+		// this header defensively, but skipping it here covers share responses
+		// before their handler runs.
+		path := c.Request.URL.Path
+		if !strings.HasPrefix(path, "/share/") && !strings.HasPrefix(path, "/api/files/") {
+			c.Header("X-Frame-Options", "DENY")
+		}
 		c.Header("Referrer-Policy", "no-referrer")
 		c.Next()
 	}

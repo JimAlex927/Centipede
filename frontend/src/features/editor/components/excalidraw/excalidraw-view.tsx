@@ -21,6 +21,7 @@ import { useDisclosure } from "@mantine/hooks";
 import "@excalidraw/excalidraw/index.css";
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 import { IAttachment } from "@/features/attachments/types/attachment.types";
+import { appendCacheBust, getAttachmentFileUrl } from "@/lib/config.ts";
 import ReactClearModal from "react-clear-modal";
 import clsx from "clsx";
 import { IconEdit } from "@tabler/icons-react";
@@ -108,7 +109,7 @@ export default function ExcalidrawView(props: NodeViewProps) {
 
       if (updateSrc) {
         updateAttributes({
-          src: `/api/files/${attachment.id}/${attachment.fileName}?t=${new Date(attachment.updatedAt).getTime()}`,
+          src: appendCacheBust(getAttachmentFileUrl(attachment), new Date(attachment.updatedAt).getTime()),
           title: attachment.fileName,
           size: attachment.fileSize,
           attachmentId: attachment.id,

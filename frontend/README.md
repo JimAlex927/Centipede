@@ -23,6 +23,11 @@ Set `APP_URL` in the Go repository `.env` when the backend uses another URL.
 Build the static frontend from this directory:
 
 ```powershell
+# If the static files are served without a reverse-proxy /api route:
+$env:API_BASE_URL = "http://localhost:7788/api"
+
+# Build the editor extension first when its source changed.
+pnpm editor-ext:build
 pnpm build
 pnpm preview
 ```

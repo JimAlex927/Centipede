@@ -24,11 +24,13 @@ import (
 	"centipede/internal/modules/docmost/adapter/out/postgres"
 
 	"github.com/gin-gonic/gin"
+	htmlnode "golang.org/x/net/html"
 )
 
 type zipImportEntry struct {
-	Path string
-	File *zip.File
+	Path       string
+	File       *zip.File
+	ParentPath string
 }
 
 type zipImportPageMetadata struct {
@@ -220,7 +222,15 @@ func (handler *Handler) processGenericZip(ctx context.Context, data []byte, spac
 			continue
 		}
 		if file.UncompressedSize64 <= maxImportedAttachmentSize {
-			assets[name] = file
+			assetPath := name
+			if source == "confluence" {
+				// Confluence HTML exports keep attachments under
+				// download/attachments/<pageID>/, while the HTML references
+				// them through /download/attachments/... URLs. Store a single
+				// canonical form so both Cloud and Server exports resolve.
+				assetPath = normalizeConfluenceAssetPath(name)
+			}
+			assets[assetPath] = file
 		}
 	}
 	if len(entries) == 0 {
@@ -232,7 +242,11 @@ func (handler *Handler) processGenericZip(ctx context.Context, data []byte, spac
 	}
 	delete(assets, "docmost-metadata.json")
 	if source == "confluence" {
+		parents := confluencePageParents(findConfluenceIndexEntry(archive.File), entries)
 		entries = filterConfluencePageEntries(entries)
+		for index := range entries {
+			entries[index].ParentPath = parents[entries[index].Path]
+		}
 	}
 	if len(entries) == 0 {
 		return errors.New("ZIP contains no supported document pages")
@@ -240,6 +254,12 @@ func (handler *Handler) processGenericZip(ctx context.Context, data []byte, spac
 	sort.Slice(entries, func(left, right int) bool {
 		return zipPathDepth(entries[left].Path) < zipPathDepth(entries[right].Path) || (zipPathDepth(entries[left].Path) == zipPathDepth(entries[right].Path) && entries[left].Path < entries[right].Path)
 	})
+	if source == "confluence" {
+		// The generic path sort above is deterministic, but it does not know
+		// about the parent relationships recovered from index.html. Reorder
+		// once more so every parent is inserted before its children.
+		entries = orderConfluencePageEntries(entries)
+	}
 	directoriesList := make([]string, 0, len(directories))
 	// Confluence's `pages/<numeric-id>/...` directories are export
 	// implementation details, not page folders. Creating them as pages would
@@ -315,10 +335,14 @@ func (handler *Handler) processGenericZip(ctx context.Context, data []byte, spac
 		if mergedDirectory, ok := mergedEntryDirectories[entry.Path]; ok {
 			logicalDirectory = pathpkg.Dir(mergedDirectory)
 		}
+		parentPageID := pageByPath[logicalDirectory]
+		if source == "confluence" && entry.ParentPath != "" {
+			parentPageID = pageByEntryPath[entry.ParentPath]
+		}
 		title := zipImportTitle(strings.TrimSuffix(pathpkg.Base(entry.Path), filepath.Ext(entry.Path)), source)
 		page, createErr := handler.repository.CreatePage(ctx, current.Workspace.ID, current.User.ID, postgres.PageInput{
 			Title: &title, Icon: pageMetadata.Icon, Position: optionalString(pageMetadata.Position),
-			SpaceID: &spaceID, ParentPageID: optionalString(pageByPath[logicalDirectory]), Content: []byte(`{"type":"doc","content":[]}`),
+			SpaceID: &spaceID, ParentPageID: optionalString(parentPageID), Content: []byte(`{"type":"doc","content":[]}`),
 		})
 		if createErr != nil {
 			return createErr
@@ -345,7 +369,7 @@ func (handler *Handler) processGenericZip(ctx context.Context, data []byte, spac
 		if pageID == "" {
 			return errors.New("imported page was not allocated")
 		}
-		nodes, err = handler.importZipAttachments(ctx, pageID, spaceID, entry.Path, source, nodes, assets, current)
+		nodes, err = handler.importZipAttachments(ctx, pageID, spaceID, entry.Path, entry.File, source, nodes, assets, current)
 		if err != nil {
 			return err
 		}
@@ -375,10 +399,10 @@ func filterConfluencePageEntries(entries []zipImportEntry) []zipImportEntry {
 	if len(entries) <= 1 {
 		return entries
 	}
+	indexPath := confluenceRootIndexPath(entries)
 	filtered := make([]zipImportEntry, 0, len(entries))
 	for _, entry := range entries {
-		base := strings.ToLower(pathpkg.Base(entry.Path))
-		if (base == "index.html" || base == "index.htm") && pathpkg.Dir(entry.Path) == "." {
+		if entry.Path == indexPath {
 			// The root index is the export navigation page. Importing it as a
 			// document creates a useless duplicate page and its links are only
 			// navigation chrome, not page content.
@@ -387,6 +411,148 @@ func filterConfluencePageEntries(entries []zipImportEntry) []zipImportEntry {
 		filtered = append(filtered, entry)
 	}
 	return filtered
+}
+
+func findConfluenceIndexEntry(files []*zip.File) *zip.File {
+	var result *zip.File
+	resultDepth := int(^uint(0) >> 1)
+	for _, file := range files {
+		name := normalizeZipEntryPath(file.Name)
+		base := strings.ToLower(pathpkg.Base(name))
+		if (base == "index.html" || base == "index.htm") && zipPathDepth(name) < resultDepth {
+			result = file
+			resultDepth = zipPathDepth(name)
+		}
+	}
+	return result
+}
+
+func normalizeZipEntryPath(value string) string {
+	return strings.Trim(strings.ReplaceAll(value, "\\", "/"), "/")
+}
+
+func confluenceRootIndexPath(entries []zipImportEntry) string {
+	indexPath := ""
+	indexDepth := int(^uint(0) >> 1)
+	for _, entry := range entries {
+		base := strings.ToLower(pathpkg.Base(entry.Path))
+		depth := zipPathDepth(entry.Path)
+		if (base == "index.html" || base == "index.htm") && depth < indexDepth {
+			indexPath = entry.Path
+			indexDepth = depth
+		}
+	}
+	return indexPath
+}
+
+// confluencePageParents reads the nested page list from the HTML export's
+// root index. Some Confluence versions omit this list; in that case the
+// importer intentionally returns no parents and keeps the pages at root.
+func confluencePageParents(indexFile *zip.File, entries []zipImportEntry) map[string]string {
+	parents := make(map[string]string)
+	if indexFile == nil || len(entries) == 0 {
+		return parents
+	}
+	known := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		known[entry.Path] = struct{}{}
+	}
+	reader, err := indexFile.Open()
+	if err != nil {
+		return parents
+	}
+	document, err := htmlnode.Parse(reader)
+	_ = reader.Close()
+	if err != nil {
+		return parents
+	}
+	walkConfluenceIndex(document, "", known, parents, normalizeZipEntryPath(indexFile.Name))
+	return parents
+}
+
+func walkConfluenceIndex(node *htmlnode.Node, parent string, known map[string]struct{}, parents map[string]string, indexPath string) {
+	if node == nil {
+		return
+	}
+	if node.Type == htmlnode.ElementNode && node.Data == "li" {
+		pagePath := confluenceIndexPageAnchor(node, known, indexPath)
+		effectiveParent := parent
+		if pagePath != "" {
+			if parent != "" && parent != pagePath {
+				parents[pagePath] = parent
+			}
+			effectiveParent = pagePath
+		}
+		for child := node.FirstChild; child != nil; child = child.NextSibling {
+			if child.Type == htmlnode.ElementNode && child.Data == "ul" {
+				walkConfluenceIndex(child, effectiveParent, known, parents, indexPath)
+			}
+		}
+		return
+	}
+	for child := node.FirstChild; child != nil; child = child.NextSibling {
+		walkConfluenceIndex(child, parent, known, parents, indexPath)
+	}
+}
+
+func confluenceIndexPageAnchor(node *htmlnode.Node, known map[string]struct{}, indexPath string) string {
+	if node == nil {
+		return ""
+	}
+	if node.Type == htmlnode.ElementNode && node.Data == "ul" {
+		return ""
+	}
+	if node.Type == htmlnode.ElementNode && node.Data == "a" {
+		for _, attribute := range node.Attr {
+			if attribute.Key != "href" {
+				continue
+			}
+			candidate := zipResourcePathForSource(indexPath, attribute.Val, "confluence")
+			if _, ok := known[candidate]; ok {
+				return candidate
+			}
+		}
+	}
+	for child := node.FirstChild; child != nil; child = child.NextSibling {
+		if candidate := confluenceIndexPageAnchor(child, known, indexPath); candidate != "" {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func orderConfluencePageEntries(entries []zipImportEntry) []zipImportEntry {
+	if len(entries) < 2 {
+		return entries
+	}
+	byPath := make(map[string]zipImportEntry, len(entries))
+	for _, entry := range entries {
+		byPath[entry.Path] = entry
+	}
+	ordered := make([]zipImportEntry, 0, len(entries))
+	visiting := make(map[string]bool, len(entries))
+	visited := make(map[string]bool, len(entries))
+	var visit func(string)
+	visit = func(path string) {
+		if visited[path] || visiting[path] {
+			return
+		}
+		entry, ok := byPath[path]
+		if !ok {
+			return
+		}
+		visiting[path] = true
+		if entry.ParentPath != "" {
+			visit(entry.ParentPath)
+		}
+		visiting[path] = false
+		visited[path] = true
+		ordered = append(ordered, entry)
+	}
+	for _, entry := range entries {
+		visit(entry.Path)
+	}
+	return ordered
 }
 
 func readZipImportMetadata(file *zip.File) (*zipImportMetadata, error) {
@@ -479,7 +645,7 @@ func zipInternalLinkTarget(currentPath, href string, pageByPath map[string]strin
 	return "", "", false
 }
 
-func (handler *Handler) importZipAttachments(ctx context.Context, pageID, spaceID, pagePath, source string, nodes []importNode, assets map[string]*zip.File, current principal) ([]importNode, error) {
+func (handler *Handler) importZipAttachments(ctx context.Context, pageID, spaceID, pagePath string, pageFile *zip.File, source string, nodes []importNode, assets map[string]*zip.File, current principal) ([]importNode, error) {
 	if handler.storage == nil || len(assets) == 0 {
 		return nodes, nil
 	}
@@ -552,7 +718,7 @@ func (handler *Handler) importZipAttachments(ctx context.Context, pageID, spaceI
 	}
 	if source == "confluence" {
 		var appendErr error
-		nodes, appendErr = appendConfluenceUnreferencedAttachments(ctx, handler, pageID, spaceID, pagePath, nodes, assets, imported, drawioRendered, current)
+		nodes, appendErr = appendConfluenceUnreferencedAttachments(ctx, handler, pageID, spaceID, pagePath, pageFile, nodes, assets, imported, drawioRendered, current)
 		if appendErr != nil {
 			return nil, appendErr
 		}
@@ -565,8 +731,8 @@ func (handler *Handler) importZipAttachments(ctx context.Context, pageID, spaceI
 // contain a link to them. The Node importer adds these as attachment nodes as
 // well, which is important for diagrams and files that users expect to find in
 // the page's attachment panel after migration.
-func appendConfluenceUnreferencedAttachments(ctx context.Context, handler *Handler, pageID, spaceID, pagePath string, nodes []importNode, assets map[string]*zip.File, imported, drawioRendered map[string]string, current principal) ([]importNode, error) {
-	attachmentPaths := confluencePageAttachmentPaths(pagePath, assets)
+func appendConfluenceUnreferencedAttachments(ctx context.Context, handler *Handler, pageID, spaceID, pagePath string, pageFile *zip.File, nodes []importNode, assets map[string]*zip.File, imported, drawioRendered map[string]string, current principal) ([]importNode, error) {
+	attachmentPaths := confluencePageAttachmentPathsForFile(pagePath, pageFile, assets)
 	if len(attachmentPaths) == 0 {
 		return nodes, nil
 	}
@@ -624,7 +790,16 @@ func appendConfluenceUnreferencedAttachments(ctx context.Context, handler *Handl
 }
 
 func confluencePageAttachmentPaths(pagePath string, assets map[string]*zip.File) []string {
+	return confluencePageAttachmentPathsForIDs(confluencePageIDs(pagePath), assets)
+}
+
+func confluencePageAttachmentPathsForFile(pagePath string, pageFile *zip.File, assets map[string]*zip.File) []string {
 	pageIDs := confluencePageIDs(pagePath)
+	pageIDs = appendUniqueStrings(pageIDs, confluencePageIDsFromFile(pageFile)...)
+	return confluencePageAttachmentPathsForIDs(pageIDs, assets)
+}
+
+func confluencePageAttachmentPathsForIDs(pageIDs []string, assets map[string]*zip.File) []string {
 	if len(pageIDs) == 0 {
 		return nil
 	}
@@ -643,6 +818,53 @@ func confluencePageAttachmentPaths(pagePath string, assets map[string]*zip.File)
 	}
 	sort.Strings(paths)
 	return paths
+}
+
+var confluenceAttachmentPageIDPattern = regexp.MustCompile(`(?i)(?:download/)?attachments/([0-9]+)/`)
+
+func confluencePageIDsFromFile(file *zip.File) []string {
+	if file == nil {
+		return nil
+	}
+	reader, err := file.Open()
+	if err != nil {
+		return nil
+	}
+	data, err := io.ReadAll(io.LimitReader(reader, maxImportedAttachmentSize+1))
+	_ = reader.Close()
+	if err != nil || len(data) > maxImportedAttachmentSize {
+		return nil
+	}
+	matches := confluenceAttachmentPageIDPattern.FindAllSubmatch(data, -1)
+	result := make([]string, 0, len(matches))
+	seen := make(map[string]struct{}, len(matches))
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
+		}
+		pageID := string(match[1])
+		if _, ok := seen[pageID]; ok {
+			continue
+		}
+		seen[pageID] = struct{}{}
+		result = append(result, pageID)
+	}
+	return result
+}
+
+func appendUniqueStrings(values []string, additions ...string) []string {
+	seen := make(map[string]struct{}, len(values)+len(additions))
+	for _, value := range values {
+		seen[value] = struct{}{}
+	}
+	for _, value := range additions {
+		if _, ok := seen[value]; ok || value == "" {
+			continue
+		}
+		seen[value] = struct{}{}
+		values = append(values, value)
+	}
+	return values
 }
 
 func confluencePageIDs(pagePath string) []string {
@@ -712,7 +934,11 @@ func (handler *Handler) createImportedAttachmentData(ctx context.Context, pageID
 	if mimeType == "" {
 		mimeType = http.DetectContentType(data)
 	}
-	relativePath := pathpkg.Join("file", current.Workspace.ID, attachmentID, fileName)
+	// Match Docmost Node's canonical local-storage layout. Older Go imports
+	// used file/<workspace>/<attachment>/<name>; Local storage keeps that path
+	// readable as a compatibility fallback, but new records should use the
+	// Node-compatible path.
+	relativePath := pathpkg.Join(current.Workspace.ID, "files", attachmentID, fileName)
 	if _, err = handler.storage.Save(ctx, relativePath, bytes.NewReader(data), maxImportedAttachmentSize); err != nil {
 		return "", err
 	}
@@ -903,13 +1129,18 @@ func zipResourcePathForSource(pagePath, resource, source string) string {
 		resourcePath = unescaped
 	}
 	if source == "confluence" {
-		resourcePath = strings.TrimPrefix(resourcePath, "/")
-		resourcePath = strings.TrimPrefix(resourcePath, "download/")
+		resourcePath = normalizeConfluenceAssetPath(resourcePath)
 		if strings.HasPrefix(resourcePath, "attachments/") {
 			return pathpkg.Clean(resourcePath)
 		}
 	}
 	return strings.TrimPrefix(pathpkg.Clean(pathpkg.Join(pathpkg.Dir(pagePath), resourcePath)), "./")
+}
+
+func normalizeConfluenceAssetPath(value string) string {
+	value = strings.Trim(strings.ReplaceAll(value, "\\", "/"), "/")
+	value = strings.TrimPrefix(value, "download/")
+	return pathpkg.Clean(value)
 }
 
 // Confluence Server exports are inconsistent about attachment names. The HTML

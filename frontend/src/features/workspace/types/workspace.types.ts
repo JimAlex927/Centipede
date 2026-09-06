@@ -23,6 +23,7 @@ export interface IWorkspace {
   enforceMfa?: boolean;
   aiSearch?: boolean;
   generativeAi?: boolean;
+  aiChat?: boolean;
   disablePublicSharing?: boolean;
   mcpEnabled?: boolean;
   aiChatReadOnly?: boolean;

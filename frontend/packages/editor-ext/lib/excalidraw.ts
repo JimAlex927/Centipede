@@ -2,7 +2,11 @@ import { Node, mergeAttributes } from "@tiptap/core";
 import { ResizableNodeView } from "./resizable-nodeview";
 import type { ResizableNodeViewDirection } from "./resizable-nodeview";
 import { ReactNodeViewRenderer } from "@tiptap/react";
-import { normalizeFileUrl, syncAltBadge } from "./media-utils";
+import {
+  normalizeFileUrl,
+  setAuthenticatedMediaSource,
+  syncAltBadge,
+} from "./media-utils";
 
 export type ExcalidrawResizeOptions = {
   enabled: boolean;
@@ -152,17 +156,20 @@ export const Excalidraw = Node.create<ExcalidrawOptions>({
   },
 
   renderHTML({ HTMLAttributes }) {
+    const src = normalizeFileUrl(HTMLAttributes["data-src"]);
+    const attributes = mergeAttributes(
+      { "data-type": this.name },
+      this.options.HTMLAttributes,
+      { ...HTMLAttributes, "data-src": src },
+    );
+
     return [
       "div",
-      mergeAttributes(
-        { "data-type": this.name },
-        this.options.HTMLAttributes,
-        HTMLAttributes,
-      ),
+      attributes,
       [
         "img",
         {
-          src: HTMLAttributes["data-src"],
+          src,
           alt: HTMLAttributes["data-alt"] || HTMLAttributes["data-title"],
           width: HTMLAttributes["data-width"],
         },
@@ -233,7 +240,7 @@ export const Excalidraw = Node.create<ExcalidrawOptions>({
       }
 
       const el = document.createElement("img");
-      el.src = normalizeFileUrl(node.attrs.src);
+      setAuthenticatedMediaSource(el, node.attrs.src);
       el.alt = node.attrs.alt || node.attrs.title || "";
       el.style.display = "block";
       el.style.maxWidth = "100%";
@@ -269,7 +276,7 @@ export const Excalidraw = Node.create<ExcalidrawOptions>({
           }
 
           if (updatedNode.attrs.src !== currentNode.attrs.src) {
-            el.src = normalizeFileUrl(updatedNode.attrs.src);
+            setAuthenticatedMediaSource(el, updatedNode.attrs.src);
           }
 
           if (

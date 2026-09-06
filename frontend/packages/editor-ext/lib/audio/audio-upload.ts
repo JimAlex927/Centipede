@@ -1,4 +1,4 @@
-import { MediaUploadOptions, UploadFn } from "../media-utils";
+import { getAttachmentFileUrl, MediaUploadOptions, UploadFn } from "../media-utils";
 import { IAttachment } from "../types";
 import { generateNodeId } from "../utils";
 import { Node } from "@tiptap/pm/model";
@@ -75,7 +75,7 @@ const handleAudioUpload =
         if (currentPos === null || !attachment) return;
 
         tr.setNodeMarkup(currentPos, undefined, {
-          src: `/api/files/${attachment.id}/${attachment.fileName}`,
+          src: getAttachmentFileUrl(attachment),
           attachmentId: attachment.id,
           size: attachment.fileSize,
         });

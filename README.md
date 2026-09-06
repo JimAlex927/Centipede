@@ -83,7 +83,7 @@ migration:
 
 迁移期间，Docmost 前端将 `API_BASE_URL` 指向 Centipede 的 `/api` 地址即可。每迁移一个领域，再把对应路由注册到 Centipede，旧服务会自动退居为该路由的 fallback；不需要一次性切换全部接口。
 
-当前 Go 服务直接访问 Docmost PostgreSQL 数据库，已覆盖认证、空间、页面、评论、搜索、附件、导入导出、协同编辑、实时通知、公开分享、MCP 和 SSO 群组同步等主要链路。`legacy_base_url` 可以留空，只有尚未迁移的企业版能力、完整 Confluence 导入等功能仍需要旧 Node 服务。
+当前 Go 服务直接访问 Docmost PostgreSQL 数据库，已覆盖认证、空间、页面、评论、搜索、附件、导入导出、协同编辑、实时通知、公开分享、MCP、完整 Notion/Confluence ZIP 导入和 SSO 群组同步等主要链路。自托管企业版能力（许可证、MFA、SSO、SCIM、权限、审计、Bases、AI、OAuth、模板等）由 Go 提供；`legacy_base_url` 可以留空。迁移状态中剩余的 Billing 仅适用于 Docmost Cloud 的 Stripe 计费流程，不影响自托管实例脱离 Node。
 
 ### 启动 Docmost 前端
 
@@ -100,14 +100,21 @@ pnpm install
 pnpm dev
 ```
 
-如需使用迁移状态接口中仍标记为 pending 的功能，再启动 Node 服务，并在 Go 配置中设置 `migration.legacy_base_url`。
+如需使用云端专属 Billing 流程，需要接入 Docmost Cloud 的计费服务；自托管部署无需启动 Node 服务。
 
 扫描版 PDF 的 OCR 是可选外部能力，不依赖 Node。配置 `pdf_ocr.tesseract_path` 和
 `pdf_ocr.pdftoppm_path` 后，Go 后端会在文本提取为空时调用这两个程序；不配置时仍支持普通文本 PDF 导入，并会明确提示需要 OCR 配置。
 
+AI 搜索可配置 OpenAI-compatible 的嵌入接口：设置 `ai.embedding_model`（以及可选的
+`ai.vector_driver: "postgres"`）后，页面和附件会通过 Go 后台任务异步建立语义索引；索引建立期间 AI Answers 自动使用关键词搜索。已有 Docmost 数据库执行
+`go run ./cmd/migrate -dir migrations/docmost -upgrade-existing` 会应用 `000004_ai_embeddings.sql`。
+
 浏览器访问 `http://localhost:5173`。生产环境执行 `pnpm build`，再将
 `frontend/dist/` 部署到静态 Web 服务器，并把 `/api`、`/collab` 和
 `/realtime` 转发到 Go 后端。
+
+本地附件默认保存在 `data/storage/`，与 Docmost Node 的目录约定一致；
+旧版 Go 曾写入 `data/` 的附件仍会自动回退读取。
 
 ## 身份边界
 
@@ -133,7 +140,7 @@ Copy-Item .env.example .env
 go run ./cmd/migrate
 ```
 
-`000003` 增加本地账号字段，`000004` 创建词汇条目和上下文表。生产环境必须在实际配置文件或 Nacos 配置中设置至少 32 个字符的 `auth.jwt_secret`，并启用 `auth.cookie_secure=true`；`config/application-production.yaml` 中的 `CHANGE_ME` 不能直接启动。
+`migrations/docmost/000003` 增加本地账号字段，`migrations/docmost/000004` 创建 AI 语义索引任务和向量表；根目录 `migrations/000004` 则是词汇条目和上下文表。生产环境必须在实际配置文件或 Nacos 配置中设置至少 32 个字符的 `auth.jwt_secret`，并启用 `auth.cookie_secure=true`；`config/application-production.yaml` 中的 `CHANGE_ME` 不能直接启动。
 
 ## 前端
 
@@ -148,12 +155,12 @@ corepack pnpm dev
 ## License 生成
 
 使用 Go 命令生成签名 license。`-secret` 必须与后端配置中的
-`auth.jwt_secret` 一致；生成后可以在 Docmost 管理员的 License 页面激活，
+`license.signing_secret` 一致；如果未配置该字段，则使用 `auth.jwt_secret`；生成后可以在 Docmost 管理员的 License 页面激活，
 或调用 `/api/license/activate`。
 
 ```powershell
 go run ./cmd/license `
-  -secret "<与 auth.jwt_secret 相同的密钥>" `
+  -secret "<与 license.signing_secret 相同的密钥>" `
   -customer "Example Inc." `
   -seats 100 `
   -type enterprise `

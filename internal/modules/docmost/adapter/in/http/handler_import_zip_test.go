@@ -33,6 +33,12 @@ func TestZipResourcePath(t *testing.T) {
 	if got := zipResourcePathForSource("Page.html", "/download/attachments/diagram.png?version=1", "confluence"); got != "attachments/diagram.png" {
 		t.Fatalf("unexpected Confluence resource path: %q", got)
 	}
+	if got := normalizeConfluenceAssetPath("download/attachments/123/manual.pdf"); got != "attachments/123/manual.pdf" {
+		t.Fatalf("unexpected canonical Confluence asset path: %q", got)
+	}
+	if got := normalizeConfluenceAssetPath("/attachments/123/manual.pdf"); got != "attachments/123/manual.pdf" {
+		t.Fatalf("unexpected normalized Confluence asset path: %q", got)
+	}
 }
 
 func TestZipImportTitleStripsNotionIDs(t *testing.T) {
@@ -144,6 +150,59 @@ func TestFilterConfluencePageEntriesRemovesRootIndex(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatal("single-page archive should retain its only document")
 	}
+	entries = filterConfluencePageEntries([]zipImportEntry{
+		{Path: "export/index.html"},
+		{Path: "export/pages/12345/Project.html"},
+	})
+	if len(entries) != 1 || entries[0].Path != "export/pages/12345/Project.html" {
+		t.Fatalf("nested Confluence root index was not removed: %#v", entries)
+	}
+}
+
+func TestConfluencePageParentsFromIndex(t *testing.T) {
+	var buffer bytes.Buffer
+	writer := zip.NewWriter(&buffer)
+	index, err := writer.Create("index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := index.Write([]byte(`<ul><li><a href="pages/1/Parent.html">Parent</a><ul><li><a href="pages/2/Child.html">Child</a><ul><li><a href="pages/3/Grandchild.html">Grandchild</a></li></ul></li></ul></li></ul>`)); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"pages/1/Parent.html", "pages/2/Child.html", "pages/3/Grandchild.html"} {
+		if _, err := writer.Create(name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := zip.NewReader(bytes.NewReader(buffer.Bytes()), int64(buffer.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := []zipImportEntry{
+		{Path: "pages/1/Parent.html"},
+		{Path: "pages/2/Child.html"},
+		{Path: "pages/3/Grandchild.html"},
+	}
+	parents := confluencePageParents(findConfluenceIndexEntry(archive.File), entries)
+	want := map[string]string{
+		"pages/2/Child.html":      "pages/1/Parent.html",
+		"pages/3/Grandchild.html": "pages/2/Child.html",
+	}
+	if !reflect.DeepEqual(parents, want) {
+		t.Fatalf("unexpected Confluence page parents: %#v", parents)
+	}
+
+	ordered := orderConfluencePageEntries([]zipImportEntry{
+		{Path: "pages/3/Grandchild.html", ParentPath: "pages/2/Child.html"},
+		{Path: "pages/2/Child.html", ParentPath: "pages/1/Parent.html"},
+		{Path: "pages/1/Parent.html"},
+	})
+	if len(ordered) != 3 || ordered[0].Path != "pages/1/Parent.html" || ordered[1].Path != "pages/2/Child.html" || ordered[2].Path != "pages/3/Grandchild.html" {
+		t.Fatalf("Confluence pages were not topologically ordered: %#v", ordered)
+	}
 }
 
 func TestConfluenceDrawioPair(t *testing.T) {
@@ -235,6 +294,45 @@ func TestConfluencePageAttachmentPaths(t *testing.T) {
 	}
 	if got := confluencePageIDs("index.html"); len(got) != 0 {
 		t.Fatalf("index page unexpectedly had Confluence page IDs: %#v", got)
+	}
+}
+
+func TestConfluencePageAttachmentPathsFromHTML(t *testing.T) {
+	var buffer bytes.Buffer
+	writer := zip.NewWriter(&buffer)
+	page, err := writer.Create("Project.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := page.Write([]byte(`<a href="/download/attachments/12345/45678/manual.pdf">manual</a>`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Create("download/attachments/12345/manual.pdf"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Create("download/attachments/99999/other.pdf"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := zip.NewReader(bytes.NewReader(buffer.Bytes()), int64(buffer.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assets := map[string]*zip.File{}
+	var pageFile *zip.File
+	for _, file := range archive.File {
+		name := normalizeConfluenceAssetPath(file.Name)
+		if name == "Project.html" {
+			pageFile = file
+			continue
+		}
+		assets[name] = file
+	}
+	got := confluencePageAttachmentPathsForFile("Project.html", pageFile, assets)
+	if !reflect.DeepEqual(got, []string{"attachments/12345/manual.pdf"}) {
+		t.Fatalf("unexpected HTML-derived attachment paths: %#v", got)
 	}
 }
 

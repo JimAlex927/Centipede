@@ -134,7 +134,7 @@ func (handler *Handler) samlCallback(c *gin.Context) {
 	}
 	user, err := handler.repository.UserByAuthAccount(c.Request.Context(), provider.ID, providerUserID, workspace.ID)
 	if errors.Is(err, postgres.ErrNotFound) {
-		user, err = handler.repository.CreateSSOUser(c.Request.Context(), workspace.ID, provider.ID, providerUserID, name, email, workspace.DefaultRole, provider.AllowSignup)
+		user, err = handler.repository.CreateSSOUser(c.Request.Context(), workspace.ID, provider.ID, providerUserID, name, email, workspace.DefaultRole, provider.AllowSignup, handler.licenseSeatLimit(c.Request.Context(), workspace.ID))
 	} else if err != nil {
 		writeError(c, http.StatusInternalServerError, "Failed to load SSO account")
 		return
@@ -142,6 +142,8 @@ func (handler *Handler) samlCallback(c *gin.Context) {
 	if err != nil {
 		if errors.Is(err, postgres.ErrNotFound) {
 			writeError(c, http.StatusForbidden, "SSO signup is disabled for this provider")
+		} else if errors.Is(err, postgres.ErrLicenseSeatsExceeded) {
+			writeError(c, http.StatusConflict, "The active license seat limit has been reached")
 		} else {
 			writeError(c, http.StatusInternalServerError, "Failed to create SSO account")
 		}
@@ -182,7 +184,7 @@ func (handler *Handler) ldapLogin(c *gin.Context) {
 	}
 	user, err := handler.repository.UserByAuthAccount(c.Request.Context(), provider.ID, identity.ProviderUserID, workspace.ID)
 	if errors.Is(err, postgres.ErrNotFound) {
-		user, err = handler.repository.CreateSSOUser(c.Request.Context(), workspace.ID, provider.ID, identity.ProviderUserID, identity.Name, identity.Email, workspace.DefaultRole, provider.AllowSignup)
+		user, err = handler.repository.CreateSSOUser(c.Request.Context(), workspace.ID, provider.ID, identity.ProviderUserID, identity.Name, identity.Email, workspace.DefaultRole, provider.AllowSignup, handler.licenseSeatLimit(c.Request.Context(), workspace.ID))
 	} else if err != nil {
 		writeError(c, http.StatusInternalServerError, "Failed to load SSO account")
 		return
@@ -190,6 +192,8 @@ func (handler *Handler) ldapLogin(c *gin.Context) {
 	if err != nil {
 		if errors.Is(err, postgres.ErrNotFound) {
 			writeError(c, http.StatusForbidden, "SSO signup is disabled for this provider")
+		} else if errors.Is(err, postgres.ErrLicenseSeatsExceeded) {
+			writeError(c, http.StatusConflict, "The active license seat limit has been reached")
 		} else {
 			writeError(c, http.StatusInternalServerError, "Failed to create SSO account")
 		}

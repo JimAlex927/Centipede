@@ -1,6 +1,6 @@
 import { Node, mergeAttributes } from "@tiptap/core";
 import { ReactNodeViewRenderer } from "@tiptap/react";
-import { normalizeFileUrl } from "../media-utils";
+import { normalizeFileUrl, setAuthenticatedMediaSource } from "../media-utils";
 import { sanitizeUrl, isInternalFileUrl } from "../utils";
 
 export interface AudioOptions {
@@ -87,14 +87,16 @@ export const TiptapAudio = Node.create<AudioOptions>({
   },
 
   renderHTML({ HTMLAttributes }) {
+    const src = normalizeFileUrl(HTMLAttributes.src);
+
     return [
       "audio",
       mergeAttributes(
         { controls: "true", preload: "metadata" },
         this.options.HTMLAttributes,
-        HTMLAttributes,
+        { ...HTMLAttributes, src },
       ),
-      ["source", { src: HTMLAttributes.src }],
+      ["source", { src }],
     ];
   },
 
@@ -122,7 +124,7 @@ export const TiptapAudio = Node.create<AudioOptions>({
       const audio = document.createElement("audio");
       const src = node.attrs.src;
       if (src && isInternalFileUrl(src)) {
-        audio.src = normalizeFileUrl(src);
+        setAuthenticatedMediaSource(audio, src);
       }
       audio.controls = true;
       audio.preload = "metadata";

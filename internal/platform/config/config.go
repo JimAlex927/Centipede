@@ -14,6 +14,7 @@ type Config struct {
 	Server      ServerConfig
 	Database    DatabaseConfig
 	Auth        AuthConfig
+	License     LicenseConfig
 	Mail        MailConfig
 	Storage     StorageConfig
 	AI          AIConfig
@@ -47,6 +48,8 @@ type AIConfig struct {
 	APIKey          string
 	CompletionModel string
 	ChatModel       string
+	EmbeddingModel  string
+	VectorDriver    string
 	RequestTimeout  time.Duration
 }
 
@@ -77,6 +80,13 @@ type AuthConfig struct {
 	RefreshTokenTTL time.Duration
 	RefreshCookie   string
 	CookieSecure    bool
+}
+
+// LicenseConfig holds the key used to sign self-hosted enterprise licenses.
+// It intentionally has a compatibility fallback to Auth.JWTSecret when it is
+// not configured, so existing installations keep accepting their licenses.
+type LicenseConfig struct {
+	SigningSecret string
 }
 
 type MailConfig struct {
@@ -128,6 +138,9 @@ type rawConfig struct {
 		RefreshCookie   string `yaml:"refresh_cookie"`
 		CookieSecure    bool   `yaml:"cookie_secure"`
 	} `yaml:"auth"`
+	License struct {
+		SigningSecret string `yaml:"signing_secret"`
+	} `yaml:"license"`
 	Mail struct {
 		From     string `yaml:"from"`
 		Host     string `yaml:"host"`
@@ -146,6 +159,8 @@ type rawConfig struct {
 		APIKey          string `yaml:"api_key"`
 		CompletionModel string `yaml:"completion_model"`
 		ChatModel       string `yaml:"chat_model"`
+		EmbeddingModel  string `yaml:"embedding_model"`
+		VectorDriver    string `yaml:"vector_driver"`
 		Timeout         string `yaml:"timeout"`
 	} `yaml:"ai"`
 	PDFOCR struct {
@@ -221,6 +236,7 @@ func (raw rawConfig) build(environment string) (Config, error) {
 			RefreshCookie:   fallback(raw.Auth.RefreshCookie, "centipede_refresh"),
 			CookieSecure:    raw.Auth.CookieSecure,
 		},
+		License: LicenseConfig{SigningSecret: fallback(raw.License.SigningSecret, os.Getenv("LICENSE_SIGNING_SECRET"))},
 		Mail: MailConfig{
 			From: strings.TrimSpace(raw.Mail.From), Host: strings.TrimSpace(raw.Mail.Host),
 			Port: raw.Mail.Port, Username: strings.TrimSpace(raw.Mail.Username),
@@ -238,6 +254,9 @@ func (raw rawConfig) build(environment string) (Config, error) {
 			FrontendBaseURL: strings.TrimRight(strings.TrimSpace(raw.Migration.FrontendBaseURL), "/"),
 		},
 	}
+	if result.License.SigningSecret == "" {
+		result.License.SigningSecret = result.Auth.JWTSecret
+	}
 	aiTimeout := 60 * time.Second
 	if strings.TrimSpace(raw.AI.Timeout) != "" {
 		aiTimeout, err = parseDuration("ai.timeout", raw.AI.Timeout)
@@ -250,6 +269,8 @@ func (raw rawConfig) build(environment string) (Config, error) {
 	aiAPIKey := fallback(raw.AI.APIKey, os.Getenv("OPENAI_API_KEY"))
 	aiCompletionModel := fallback(raw.AI.CompletionModel, os.Getenv("AI_COMPLETION_MODEL"))
 	aiChatModel := fallback(raw.AI.ChatModel, os.Getenv("AI_CHAT_MODEL"))
+	aiEmbeddingModel := fallback(raw.AI.EmbeddingModel, os.Getenv("AI_EMBEDDING_MODEL"))
+	aiVectorDriver := fallback(raw.AI.VectorDriver, os.Getenv("AI_VECTOR_DRIVER"))
 	if aiChatModel == "" {
 		aiChatModel = aiCompletionModel
 	}
@@ -261,7 +282,8 @@ func (raw rawConfig) build(environment string) (Config, error) {
 	}
 	result.AI = AIConfig{
 		Driver: aiDriver, BaseURL: strings.TrimRight(aiBaseURL, "/"), APIKey: aiAPIKey,
-		CompletionModel: aiCompletionModel, ChatModel: aiChatModel, RequestTimeout: aiTimeout,
+		CompletionModel: aiCompletionModel, ChatModel: aiChatModel, EmbeddingModel: aiEmbeddingModel,
+		VectorDriver: fallback(aiVectorDriver, "postgres"), RequestTimeout: aiTimeout,
 	}
 	if result.Storage.MaxUploadBytes == 0 {
 		result.Storage.MaxUploadBytes = 100 * 1024 * 1024

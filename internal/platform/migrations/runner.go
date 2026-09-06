@@ -77,7 +77,8 @@ func UpgradeExisting(ctx context.Context, pool *pgxpool.Pool, directory, baselin
 	if strings.TrimSpace(baselineVersion) == "" {
 		return fmt.Errorf("migration baseline version is required")
 	}
-	for _, filename := range []string{"000002_docmost_compatibility.sql", "000003_docmost_late_tables.sql"} {
+	compatibilityMigrations := []string{"000002_docmost_compatibility.sql", "000003_docmost_late_tables.sql", "000004_ai_embeddings.sql"}
+	for _, filename := range compatibilityMigrations {
 		if _, err := os.Stat(filepath.Join(directory, filename)); err != nil {
 			return fmt.Errorf("read compatibility migration %s: %w", filename, err)
 		}
@@ -94,7 +95,7 @@ func UpgradeExisting(ctx context.Context, pool *pgxpool.Pool, directory, baselin
 		return fmt.Errorf("create schema_migrations: %w", err)
 	}
 
-	for _, filename := range []string{"000002_docmost_compatibility.sql", "000003_docmost_late_tables.sql"} {
+	for _, filename := range compatibilityMigrations {
 		var applied bool
 		if err := pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = $1)`, filename).Scan(&applied); err != nil {
 			return err

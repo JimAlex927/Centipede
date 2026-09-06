@@ -1,6 +1,7 @@
 import { Node, mergeAttributes } from "@tiptap/core";
 import { ReactNodeViewRenderer } from "@tiptap/react";
 import { sanitizeUrl } from "../utils";
+import { normalizeFileUrl } from "../media-utils";
 
 export interface AttachmentOptions {
   HTMLAttributes: Record<string, any>;
@@ -105,7 +106,7 @@ export const Attachment = Node.create<AttachmentOptions>({
       [
         "a",
         {
-          href: sanitizeUrl(HTMLAttributes["data-attachment-url"]),
+          href: normalizeFileUrl(sanitizeUrl(HTMLAttributes["data-attachment-url"])),
           class: "attachment",
           target: "blank",
         },

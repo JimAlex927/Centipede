@@ -44,6 +44,61 @@ func TestAIProviderCompleteUsesOpenAICompatibleContract(t *testing.T) {
 	}
 }
 
+func TestAIProviderUsesDedicatedCompletionModel(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var body struct {
+			Model string `json:"model"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if body.Model != "completion-model" {
+			t.Fatalf("model = %q, want completion-model", body.Model)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+	}))
+	defer server.Close()
+
+	provider := NewAIProviderWithModels(server.URL+"/v1", "", "completion-model", "chat-model", time.Second)
+	if provider.CompletionModel() != "completion-model" {
+		t.Fatalf("completion model = %q", provider.CompletionModel())
+	}
+	if _, err := provider.CompleteWithModel(context.Background(), []AIMessage{{Role: "user", Content: "hello"}}, provider.CompletionModel()); err != nil {
+		t.Fatalf("complete with dedicated model: %v", err)
+	}
+}
+
+func TestAIProviderEmbedUsesOpenAICompatibleContract(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/embeddings" {
+			t.Fatalf("path = %s", request.URL.Path)
+		}
+		var body struct {
+			Model string   `json:"model"`
+			Input []string `json:"input"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if body.Model != "embedding-model" || len(body.Input) != 2 {
+			t.Fatalf("unexpected request: %+v", body)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"data":[{"index":1,"embedding":[0.3,0.4]},{"index":0,"embedding":[0.1,0.2]}]}`))
+	}))
+	defer server.Close()
+
+	provider := NewAIProviderWithModelsAndEmbedding(server.URL+"/v1", "", "completion-model", "chat-model", "embedding-model", time.Second)
+	result, err := provider.Embed(context.Background(), []string{"first", "second"})
+	if err != nil {
+		t.Fatalf("embed: %v", err)
+	}
+	if len(result) != 2 || result[0].Index != 0 || result[1].Index != 1 || result[0].Embedding[0] != 0.1 {
+		t.Fatalf("unexpected embeddings: %+v", result)
+	}
+}
+
 func TestAIProviderRequiresConfiguration(t *testing.T) {
 	provider := NewAIProvider("", "", "", time.Second)
 	if provider.Configured() {

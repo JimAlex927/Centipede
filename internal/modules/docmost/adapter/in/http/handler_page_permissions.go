@@ -3,6 +3,7 @@ package http
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"centipede/internal/modules/docmost/adapter/out/postgres"
 	"centipede/internal/modules/docmost/domain"
@@ -126,6 +127,7 @@ func (handler *Handler) addPagePermission(c *gin.Context) {
 		}
 		return
 	}
+	handler.notifyPagePermissionGranted(c.Request.Context(), page, current.User.ID, request.Role, request.UserIDs, request.GroupIDs, time.Now().UTC())
 	handler.publishPagePermissionEvent(current.Workspace.ID, page)
 	writeData(c, http.StatusOK, nil)
 }

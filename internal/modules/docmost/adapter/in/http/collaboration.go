@@ -18,15 +18,25 @@ import (
 // CollaborationHandler wraps ygo so the Go service can expose the same basic
 // operational counters as the upstream Docmost collaboration gateway.
 type CollaborationHandler struct {
-	server      *ygows.Server
-	store       *postgres.CollaborationStore
-	realtime    *RealtimeHandler
-	connections atomic.Int64
-	documents   atomic.Int64
+	server       *ygows.Server
+	store        *postgres.CollaborationStore
+	realtime     *RealtimeHandler
+	enqueueEmail func(string)
+	enqueueAI    func(string, string)
+	connections  atomic.Int64
+	documents    atomic.Int64
 }
 
 func (handler *CollaborationHandler) SetRealtimeHandler(realtime *RealtimeHandler) {
 	handler.realtime = realtime
+}
+
+func (handler *CollaborationHandler) SetNotificationEmailEnqueuer(enqueue func(string)) {
+	handler.enqueueEmail = enqueue
+}
+
+func (handler *CollaborationHandler) SetAIEmbeddingEnqueuer(enqueue func(string, string)) {
+	handler.enqueueAI = enqueue
 }
 
 func (handler *CollaborationHandler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
@@ -59,14 +69,29 @@ func NewCollaborationHandler(repository *postgres.Repository, secret string, all
 				})
 			}
 		}
+		for _, delivery := range mentionDeliveries {
+			if handler.enqueueEmail != nil {
+				handler.enqueueEmail(delivery.ID)
+			}
+		}
 		deliveries, err := repository.CreatePageUpdateNotifications(ctx, pageID, workspaceID, actorID, actorIDs)
-		if err != nil || handler.realtime == nil {
+		if err != nil {
 			return
 		}
 		for _, delivery := range deliveries {
-			handler.realtime.PublishNotification(workspaceID, delivery.UserID, map[string]any{
-				"type": "page.updated", "notificationId": delivery.ID, "pageId": pageID,
-			})
+			if handler.realtime != nil {
+				handler.realtime.PublishNotification(workspaceID, delivery.UserID, map[string]any{
+					"type": "page.updated", "notificationId": delivery.ID, "pageId": pageID,
+				})
+			}
+			if handler.enqueueEmail != nil {
+				handler.enqueueEmail(delivery.ID)
+			}
+		}
+	})
+	store.SetUpdateCallback(func(ctx context.Context, pageID, workspaceID string) {
+		if handler.enqueueAI != nil {
+			handler.enqueueAI(workspaceID, pageID)
 		}
 	})
 	// Docmost coalesces collaboration history roughly every five minutes for

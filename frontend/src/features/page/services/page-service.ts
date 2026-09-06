@@ -1,4 +1,4 @@
-import api from "@/lib/api-client";
+import api, { unwrapApiData } from "@/lib/api-client";
 import {
   ICopyPageToSpace,
   IExportPageParams,
@@ -191,5 +191,5 @@ export async function uploadFile(
     },
   });
 
-  return req as unknown as IAttachment;
+  return unwrapApiData<IAttachment>(req as unknown as IAttachment);
 }

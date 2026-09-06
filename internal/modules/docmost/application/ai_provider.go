@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 )
@@ -75,21 +76,40 @@ type AICompletion struct {
 }
 
 type AIProvider struct {
-	baseURL string
-	apiKey  string
-	model   string
-	client  *http.Client
+	baseURL         string
+	apiKey          string
+	model           string
+	completionModel string
+	embeddingModel  string
+	client          *http.Client
 }
 
 func NewAIProvider(baseURL, apiKey, model string, timeout time.Duration) *AIProvider {
+	return NewAIProviderWithModelsAndEmbedding(baseURL, apiKey, model, model, "", timeout)
+}
+
+// NewAIProviderWithModels keeps chat/tool calls and editor generation on the
+// models configured for their respective workloads. A single model remains a
+// valid configuration and is used as the fallback for both paths.
+func NewAIProviderWithModels(baseURL, apiKey, completionModel, chatModel string, timeout time.Duration) *AIProvider {
+	return NewAIProviderWithModelsAndEmbedding(baseURL, apiKey, completionModel, chatModel, "", timeout)
+}
+
+func NewAIProviderWithModelsAndEmbedding(baseURL, apiKey, completionModel, chatModel, embeddingModel string, timeout time.Duration) *AIProvider {
 	if timeout <= 0 {
 		timeout = 60 * time.Second
 	}
+	chatModel = strings.TrimSpace(chatModel)
+	completionModel = strings.TrimSpace(completionModel)
+	if chatModel == "" {
+		chatModel = completionModel
+	}
+	if completionModel == "" {
+		completionModel = chatModel
+	}
 	return &AIProvider{
-		baseURL: strings.TrimRight(strings.TrimSpace(baseURL), "/"),
-		apiKey:  strings.TrimSpace(apiKey),
-		model:   strings.TrimSpace(model),
-		client:  &http.Client{Timeout: timeout},
+		baseURL: strings.TrimRight(strings.TrimSpace(baseURL), "/"), apiKey: strings.TrimSpace(apiKey),
+		model: chatModel, completionModel: completionModel, embeddingModel: embeddingModel, client: &http.Client{Timeout: timeout},
 	}
 }
 
@@ -125,18 +145,110 @@ type aiCompletionResponse struct {
 }
 
 func (provider *AIProvider) Complete(ctx context.Context, messages []AIMessage) (AICompletion, error) {
-	return provider.complete(ctx, messages, nil)
+	return provider.complete(ctx, messages, nil, provider.model)
 }
 
 func (provider *AIProvider) CompleteWithTools(ctx context.Context, messages []AIMessage, tools []AITool) (AICompletion, error) {
-	return provider.complete(ctx, messages, tools)
+	return provider.complete(ctx, messages, tools, provider.model)
 }
 
-func (provider *AIProvider) complete(ctx context.Context, messages []AIMessage, tools []AITool) (AICompletion, error) {
-	if !provider.Configured() {
+// CompleteWithModel is used by workloads that have an explicit model
+// selection, such as editor completion versus conversational chat.
+func (provider *AIProvider) CompleteWithModel(ctx context.Context, messages []AIMessage, model string) (AICompletion, error) {
+	return provider.complete(ctx, messages, nil, model)
+}
+
+func (provider *AIProvider) CompletionModel() string {
+	if provider == nil {
+		return ""
+	}
+	return provider.completionModel
+}
+
+func (provider *AIProvider) EmbeddingConfigured() bool {
+	return provider != nil && provider.baseURL != "" && provider.embeddingModel != ""
+}
+
+func (provider *AIProvider) EmbeddingModel() string {
+	if provider == nil {
+		return ""
+	}
+	return provider.embeddingModel
+}
+
+type AIEmbedding struct {
+	Index     int
+	Embedding []float32
+}
+
+type aiEmbeddingRequest struct {
+	Model string   `json:"model"`
+	Input []string `json:"input"`
+}
+
+func (provider *AIProvider) Embed(ctx context.Context, inputs []string) ([]AIEmbedding, error) {
+	if provider == nil || !provider.EmbeddingConfigured() || len(inputs) == 0 {
+		return nil, ErrAIProviderNotConfigured
+	}
+	payload, err := json.Marshal(aiEmbeddingRequest{Model: provider.embeddingModel, Input: inputs})
+	if err != nil {
+		return nil, fmt.Errorf("encode embedding request: %w", err)
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, provider.baseURL+"/embeddings", bytes.NewReader(payload))
+	if err != nil {
+		return nil, fmt.Errorf("create embedding request: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	if provider.apiKey != "" {
+		request.Header.Set("Authorization", "Bearer "+provider.apiKey)
+	}
+	response, err := provider.client.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("embedding provider request failed: %w", err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(response.Body, 16<<20))
+	if err != nil {
+		return nil, fmt.Errorf("read embedding response: %w", err)
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, fmt.Errorf("embedding provider returned HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var decoded struct {
+		Data []struct {
+			Index     int       `json:"index"`
+			Embedding []float32 `json:"embedding"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		return nil, fmt.Errorf("decode embedding response: %w", err)
+	}
+	if len(decoded.Data) != len(inputs) {
+		return nil, fmt.Errorf("embedding provider returned %d vectors for %d inputs", len(decoded.Data), len(inputs))
+	}
+	result := make([]AIEmbedding, 0, len(decoded.Data))
+	for _, item := range decoded.Data {
+		if len(item.Embedding) == 0 {
+			return nil, errors.New("embedding provider returned an empty vector")
+		}
+		result = append(result, AIEmbedding{Index: item.Index, Embedding: item.Embedding})
+	}
+	sort.Slice(result, func(left, right int) bool { return result[left].Index < result[right].Index })
+	return result, nil
+}
+
+func (provider *AIProvider) complete(ctx context.Context, messages []AIMessage, tools []AITool, model string) (AICompletion, error) {
+	if provider == nil {
 		return AICompletion{}, ErrAIProviderNotConfigured
 	}
-	payload, err := json.Marshal(aiCompletionRequest{Model: provider.model, Messages: messages, Tools: tools, Stream: false})
+	model = strings.TrimSpace(model)
+	if model == "" {
+		model = provider.model
+	}
+	if provider.baseURL == "" || model == "" {
+		return AICompletion{}, ErrAIProviderNotConfigured
+	}
+	payload, err := json.Marshal(aiCompletionRequest{Model: model, Messages: messages, Tools: tools, Stream: false})
 	if err != nil {
 		return AICompletion{}, fmt.Errorf("encode AI request: %w", err)
 	}

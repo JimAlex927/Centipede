@@ -22,6 +22,7 @@ type CollaborationStore struct {
 	mu           sync.Mutex
 	contributors map[string]map[string]struct{}
 	onVersion    func(context.Context, string, string, []string, []byte)
+	onUpdate     func(context.Context, string, string)
 }
 
 func (repository *Repository) CollaborationStore() *CollaborationStore {
@@ -55,6 +56,12 @@ func (store *CollaborationStore) consumeContributors(room string) []string {
 func (store *CollaborationStore) SetVersionCallback(callback func(context.Context, string, string, []string, []byte)) {
 	store.mu.Lock()
 	store.onVersion = callback
+	store.mu.Unlock()
+}
+
+func (store *CollaborationStore) SetUpdateCallback(callback func(context.Context, string, string)) {
+	store.mu.Lock()
+	store.onUpdate = callback
 	store.mu.Unlock()
 }
 
@@ -145,6 +152,16 @@ WHERE id = $1 AND deleted_at IS NULL`, pageID, fullState, jsonContent, textConte
 	// Yjs persistence write into a client-visible collaboration failure; the
 	// next persistence flush will retry the idempotent rebuild.
 	_ = store.db.SyncBacklinks(ctx, pageID, workspaceID, jsonContent)
+	// Transclusion sources and references are also derived from the projected
+	// Tiptap document. Keep their indexes in sync with collaboration saves so
+	// freshly edited blocks are visible without a Node/Bull worker.
+	_ = store.db.SyncTransclusions(ctx, pageID, workspaceID, jsonContent)
+	store.mu.Lock()
+	callback := store.onUpdate
+	store.mu.Unlock()
+	if callback != nil {
+		callback(ctx, pageID, workspaceID)
+	}
 	return nil
 }
 
@@ -166,7 +183,7 @@ func (store *CollaborationStore) SaveVersion(ctx context.Context, room, _ string
 	}
 
 	var inserted int64
-	var workspaceID string
+	var workspaceID, spaceID string
 	var snapshot []byte
 	err = store.db.db.QueryRow(ctx, `
 INSERT INTO page_history
@@ -177,17 +194,44 @@ SELECT p.id, p.slug_id, p.title, p.content, p.icon, p.cover_photo,
        ARRAY[COALESCE(p.last_updated_by_id, p.creator_id)], p.space_id, p.workspace_id
 FROM pages p
 WHERE p.id = $1 AND p.deleted_at IS NULL
+  AND NOT (
+    NOT EXISTS (
+      SELECT 1 FROM page_history first_history
+      WHERE first_history.page_id = p.id
+    )
+    AND p.content->>'type' = 'doc'
+    AND jsonb_typeof(p.content->'content') = 'array'
+    AND jsonb_array_length(p.content->'content') = 1
+    AND p.content->'content'->0->>'type' = 'paragraph'
+    AND (
+      p.content->'content'->0->'content' IS NULL
+      OR (
+        jsonb_typeof(p.content->'content'->0->'content') = 'array'
+        AND jsonb_array_length(p.content->'content'->0->'content') = 0
+      )
+    )
+  )
   AND NOT EXISTS (
     SELECT 1 FROM page_history h
     WHERE h.page_id = p.id
       AND h.content IS NOT DISTINCT FROM p.content
   )
-RETURNING 1, workspace_id::text, content`, pageID).Scan(&inserted, &workspaceID, &snapshot)
+
+RETURNING 1, workspace_id::text, space_id::text, content`, pageID).Scan(&inserted, &workspaceID, &spaceID, &snapshot)
 	if errors.Is(err, pgx.ErrNoRows) {
+		// Match the Node history worker: a first empty paragraph is not a
+		// meaningful version, and contributors from that transient save must
+		// not leak into the next real edit.
+		store.consumeContributors(room)
 		return 0, nil
 	}
 	if err == nil && inserted > 0 {
 		actors := store.consumeContributors(room)
+		// Node adds users who edited a page to its watcher list while saving
+		// collaboration history. Keep that behavior in the durable Go path;
+		// notification delivery alone is not enough because later edits would
+		// otherwise omit those contributors.
+		_ = store.db.AddPageWatchers(ctx, actors, pageID, spaceID, workspaceID)
 		store.mu.Lock()
 		callback := store.onVersion
 		store.mu.Unlock()

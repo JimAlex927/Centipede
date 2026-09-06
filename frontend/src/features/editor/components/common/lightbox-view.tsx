@@ -2,7 +2,7 @@ import type { Editor } from "@tiptap/react";
 import type { Node as PMNode } from "@tiptap/pm/model";
 import Lightbox, { type Slide } from "yet-another-react-lightbox";
 import type { LightboxRequest } from "@/features/editor/atoms/editor-atoms";
-import { getFileUrl } from "@/lib/config.ts";
+import { getFileCrossOrigin, getFileUrl } from "@/lib/config.ts";
 import "yet-another-react-lightbox/styles.css";
 import Download from "yet-another-react-lightbox/plugins/download";
 import Fullscreen from "yet-another-react-lightbox/plugins/fullscreen";
@@ -162,6 +162,12 @@ export default function LightboxView({
       index={index}
       slides={slides}
       plugins={[Download, Fullscreen, Video, Zoom]}
+      carousel={{
+        imageProps: (slide) => ({
+          crossOrigin:
+            "src" in slide ? getFileCrossOrigin(slide.src) : undefined,
+        }),
+      }}
       styles={{
         container: { backgroundColor: "rgba(0, 0, 0, 0.8)" },
         icon: { width: 24, height: 24 },
@@ -176,7 +182,11 @@ export default function LightboxView({
         enterFullscreen: () => setIsFullscreen(true),
         exitFullscreen: () => setIsFullscreen(false),
       }}
-      video={{ controls: true, playsInline: true }}
+      video={{
+        controls: true,
+        playsInline: true,
+        crossOrigin: getFileCrossOrigin(src),
+      }}
       zoom={{
         scrollToZoom: true,
         maxZoomPixelRatio: 4,

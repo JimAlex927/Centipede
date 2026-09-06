@@ -7,7 +7,11 @@ import {
 } from "@tiptap/core";
 import { ResizableNodeView } from "../resizable-nodeview";
 import type { ResizableNodeViewDirection } from "../resizable-nodeview";
-import { normalizeFileUrl, syncAltBadge } from "../media-utils";
+import {
+  normalizeFileUrl,
+  setAuthenticatedMediaSource,
+  syncAltBadge,
+} from "../media-utils";
 
 export type ImageResizeOptions = {
   enabled: boolean;
@@ -152,9 +156,14 @@ export const TiptapImage = Image.extend<ImageOptions>({
   },
 
   renderHTML({ HTMLAttributes }) {
+    const attributes = mergeAttributes(this.options.HTMLAttributes, HTMLAttributes);
+    if (attributes.src) {
+      attributes.src = normalizeFileUrl(attributes.src);
+    }
+
     return [
       "img",
-      mergeAttributes(this.options.HTMLAttributes, HTMLAttributes),
+      attributes,
     ];
   },
 
@@ -253,7 +262,7 @@ export const TiptapImage = Image.extend<ImageOptions>({
         }
       });
 
-      el.src = normalizeFileUrl(HTMLAttributes.src);
+      setAuthenticatedMediaSource(el, HTMLAttributes.src);
       el.style.display = "block";
       el.style.maxWidth = "100%";
       el.style.borderRadius = "8px";
@@ -295,7 +304,7 @@ export const TiptapImage = Image.extend<ImageOptions>({
           }
 
           if (updatedNode.attrs.src !== currentNode.attrs.src) {
-            el.src = normalizeFileUrl(updatedNode.attrs.src);
+            setAuthenticatedMediaSource(el, updatedNode.attrs.src);
           }
 
           if (updatedNode.attrs.alt !== currentNode.attrs.alt) {

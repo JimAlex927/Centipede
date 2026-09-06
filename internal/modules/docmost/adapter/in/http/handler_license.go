@@ -20,8 +20,12 @@ func (handler *Handler) licenseInfo(c *gin.Context) {
 		handler.writeRepositoryError(c, err, "License not found")
 		return
 	}
+	if key == "" || handler.licenseService == nil {
+		writeError(c, http.StatusNotFound, "License not found")
+		return
+	}
 	license, err := handler.licenseService.Verify(key, current.Workspace.ID)
-	if key == "" || err != nil {
+	if err != nil {
 		writeError(c, http.StatusNotFound, "License not found")
 		return
 	}
@@ -139,4 +143,23 @@ func (handler *Handler) workspaceHasFeature(ctx context.Context, workspaceID, fe
 		}
 	}
 	return false
+}
+
+// licenseSeatLimit returns the active license's seat limit. An empty or
+// invalid license is treated as an unlicensed workspace; feature checks still
+// deny enterprise operations, while normal self-hosted member creation keeps
+// its existing behavior.
+func (handler *Handler) licenseSeatLimit(ctx context.Context, workspaceID string) int64 {
+	if handler.licenseService == nil {
+		return 0
+	}
+	key, err := handler.repository.LicenseKey(ctx, workspaceID)
+	if err != nil || key == "" {
+		return 0
+	}
+	license, err := handler.licenseService.Verify(key, workspaceID)
+	if err != nil {
+		return 0
+	}
+	return int64(license.SeatCount)
 }

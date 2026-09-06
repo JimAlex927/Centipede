@@ -43,7 +43,7 @@ function AiChatToggle() {
   const handleChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const value = event.currentTarget.checked;
     try {
-      const updatedWorkspace = await updateWorkspace({ aiChat: value } as any);
+      const updatedWorkspace = await updateWorkspace({ aiChat: value });
       setChecked(value);
       setWorkspace(updatedWorkspace);
     } catch (err: any) {

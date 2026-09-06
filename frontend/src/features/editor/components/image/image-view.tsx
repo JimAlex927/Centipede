@@ -1,7 +1,7 @@
 import { NodeViewProps, NodeViewWrapper } from "@tiptap/react";
 import { Group, Image, Loader, Text } from "@mantine/core";
 import { useMemo } from "react";
-import { getFileUrl } from "@/lib/config.ts";
+import { getFileCrossOrigin, getFileUrl } from "@/lib/config.ts";
 import clsx from "clsx";
 import classes from "./image-view.module.css";
 import { useTranslation } from "react-i18next";
@@ -42,7 +42,13 @@ export default function ImageView(props: NodeViewProps) {
         }}
       >
         {src && (
-          <Image radius="md" fit="contain" src={getFileUrl(src)} alt={alt} />
+          <Image
+            radius="md"
+            fit="contain"
+            src={getFileUrl(src)}
+            crossOrigin={getFileCrossOrigin(src)}
+            alt={alt}
+          />
         )}
         {!src && previewSrc && (
           <Group pos="relative" h="100%" w="100%">

@@ -85,6 +85,7 @@ func (handler *Handler) runAttachmentIndex(task domain.FileTask) {
 		_ = handler.repository.UpdateFileTaskStatus(context.Background(), task.ID, task.WorkspaceID, "failed", "Failed to save attachment index")
 		return
 	}
+	handler.enqueueAIAttachmentEmbedding(attachment.WorkspaceID, attachment.ID)
 	_ = handler.repository.UpdateFileTaskStatus(context.Background(), task.ID, task.WorkspaceID, "success", "")
 }
 

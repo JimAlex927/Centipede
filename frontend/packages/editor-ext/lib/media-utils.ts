@@ -69,6 +69,48 @@ export function normalizeFileUrl(src: string): string {
   }
 }
 
+export function getAttachmentFileUrl(attachment: {
+  id: string;
+  fileName: string;
+  url?: string;
+}): string {
+  const serverUrl = typeof attachment.url === "string" ? attachment.url.trim() : "";
+  if (serverUrl) return normalizeFileUrl(serverUrl);
+
+  return normalizeFileUrl(
+    `/api/files/${encodeURIComponent(attachment.id)}/${encodeURIComponent(attachment.fileName)}`,
+  );
+}
+
+/**
+ * Set a protected media URL before assigning src. A separately hosted
+ * frontend and Go API are different origins, so browser media elements need
+ * explicit credential mode in order to send the session cookie. External
+ * images/media remain anonymous and are not affected.
+ */
+export function setAuthenticatedMediaSource(
+  element: HTMLImageElement | HTMLMediaElement,
+  src: string,
+): string {
+  const normalized = normalizeFileUrl(src);
+  let requiresCredentials = false;
+
+  if (typeof window !== "undefined" && normalized) {
+    try {
+      const parsed = new URL(normalized, window.location.origin);
+      requiresCredentials =
+        parsed.origin !== window.location.origin &&
+        parsed.pathname.startsWith("/api/files/");
+    } catch {
+      // Keep the browser's normal source handling for malformed/external URLs.
+    }
+  }
+
+  element.crossOrigin = requiresCredentials ? "use-credentials" : "";
+  element.src = normalized;
+  return normalized;
+}
+
 export function syncAltBadge(wrapper: HTMLElement, alt: unknown): void {
   const existing = wrapper.querySelector<HTMLElement>(
     ":scope > .media-alt-badge",

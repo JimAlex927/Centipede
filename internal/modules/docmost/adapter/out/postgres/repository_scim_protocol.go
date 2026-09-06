@@ -100,7 +100,7 @@ LIMIT 1`, key, workspaceID).Scan(&item.ID, &item.ExternalID, &item.UserName, &it
 	return item, err
 }
 
-func (repository *Repository) CreateSCIMUser(ctx context.Context, workspaceID string, input SCIMUserInput) (SCIMUserResource, error) {
+func (repository *Repository) CreateSCIMUser(ctx context.Context, workspaceID string, input SCIMUserInput, seatLimit int64) (SCIMUserResource, error) {
 	id, err := newUUID()
 	if err != nil {
 		return SCIMUserResource{}, err
@@ -123,6 +123,11 @@ func (repository *Repository) CreateSCIMUser(ctx context.Context, workspaceID st
 		return SCIMUserResource{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if active && seatLimit > 0 {
+		if err = lockWorkspaceSeat(ctx, tx, workspaceID, seatLimit); err != nil {
+			return SCIMUserResource{}, err
+		}
+	}
 	if _, err = tx.Exec(ctx, `
 INSERT INTO users (id, name, email, email_verified_at, password, role, workspace_id, settings, has_generated_password, scim_external_id, deactivated_at)
 VALUES ($1, $2, lower($3), now(), NULL, 'member', $4, '{}'::jsonb, true, $5, $6)`, id, name, strings.TrimSpace(input.UserName), workspaceID, input.ExternalID, deactivatedAt); err != nil {
@@ -147,13 +152,43 @@ ON CONFLICT (group_id, user_id) DO NOTHING`, membershipID, id, workspaceID); err
 	return repository.SCIMUserByIDOrExternalID(ctx, id, workspaceID)
 }
 
-func (repository *Repository) UpdateSCIMUser(ctx context.Context, key, workspaceID string, input SCIMUserInput) (SCIMUserResource, error) {
+func (repository *Repository) UpdateSCIMUser(ctx context.Context, key, workspaceID string, input SCIMUserInput, seatLimit int64) (SCIMUserResource, error) {
 	name := ""
 	if input.DisplayName != nil {
 		name = strings.TrimSpace(*input.DisplayName)
 	}
 	active := input.Active
-	_, err := repository.db.Exec(ctx, `
+	tx, err := repository.db.Begin(ctx)
+	if err != nil {
+		return SCIMUserResource{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Reactivating a previously deactivated SCIM user consumes a seat just
+	// like creating a new user. Locking the workspace before checking the
+	// current state serializes this transition with SCIM/SSO/invite creation
+	// and prevents concurrent reactivations from exceeding the license.
+	if active != nil && *active {
+		var wasActive bool
+		err = tx.QueryRow(ctx, `
+SELECT deactivated_at IS NULL
+FROM users
+WHERE workspace_id = $2 AND deleted_at IS NULL AND (id::text = $1 OR scim_external_id = $1)
+LIMIT 1`, key, workspaceID).Scan(&wasActive)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return SCIMUserResource{}, ErrNotFound
+		}
+		if err != nil {
+			return SCIMUserResource{}, err
+		}
+		if !wasActive {
+			if err = lockWorkspaceSeat(ctx, tx, workspaceID, seatLimit); err != nil {
+				return SCIMUserResource{}, err
+			}
+		}
+	}
+
+	result, err := tx.Exec(ctx, `
 UPDATE users SET
   email = COALESCE(NULLIF(lower($3), ''), email),
   name = COALESCE(NULLIF($4, ''), name),
@@ -162,6 +197,12 @@ UPDATE users SET
   updated_at = now()
 WHERE workspace_id = $2 AND deleted_at IS NULL AND (id::text = $1 OR scim_external_id = $1)`, key, workspaceID, input.UserName, name, input.ExternalID, active)
 	if err != nil {
+		return SCIMUserResource{}, err
+	}
+	if result.RowsAffected() == 0 {
+		return SCIMUserResource{}, ErrNotFound
+	}
+	if err = tx.Commit(ctx); err != nil {
 		return SCIMUserResource{}, err
 	}
 	return repository.SCIMUserByIDOrExternalID(ctx, key, workspaceID)

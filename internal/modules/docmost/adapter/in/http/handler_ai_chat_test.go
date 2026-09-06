@@ -1,9 +1,12 @@
 package http
 
 import (
+	"context"
+	"encoding/json"
 	"testing"
 
 	"centipede/internal/modules/docmost/application"
+	"centipede/internal/modules/docmost/domain"
 )
 
 func TestAIDocumentText(t *testing.T) {
@@ -48,5 +51,19 @@ func TestStringArgumentDoesNotCoerceValues(t *testing.T) {
 	}
 	if got := stringArgument(args, "valid"); got != " Page " {
 		t.Fatalf("string argument changed to %q", got)
+	}
+}
+
+func TestAIChatReadOnlyBlocksPageWrites(t *testing.T) {
+	handler := &Handler{}
+	current := principal{Workspace: domain.Workspace{
+		Settings: json.RawMessage(`{"ai":{"chatReadOnly":true}}`),
+	}}
+
+	for _, name := range []string{"create_page", "update_page"} {
+		_, err := handler.executeAIChatTool(context.Background(), current, name, map[string]any{})
+		if err == nil || err.Error() != "AI Chat is in read-only mode" {
+			t.Fatalf("tool %q error = %v, want read-only error", name, err)
+		}
 	}
 }

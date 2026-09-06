@@ -14,4 +14,5 @@ export interface IAttachment {
   createdAt: string;
   updatedAt: string;
   deletedAt: string | null;
+  url?: string;
 }

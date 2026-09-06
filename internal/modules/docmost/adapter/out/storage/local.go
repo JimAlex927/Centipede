@@ -12,7 +12,8 @@ import (
 )
 
 type Local struct {
-	root string
+	root          string
+	fallbackRoots []string
 }
 
 func NewLocal(root string) (*Local, error) {
@@ -23,7 +24,18 @@ func NewLocal(root string) (*Local, error) {
 	if err = os.MkdirAll(absolute, 0o750); err != nil {
 		return nil, err
 	}
-	return &Local{root: filepath.Clean(absolute)}, nil
+
+	// Docmost Node stores local files below data/storage. Older Centipede
+	// versions used data directly, so keep that location as a read/delete
+	// fallback when the configured root is the canonical storage directory.
+	fallbackRoots := []string(nil)
+	if strings.EqualFold(filepath.Base(absolute), "storage") {
+		legacyRoot := filepath.Dir(absolute)
+		if legacyRoot != absolute {
+			fallbackRoots = []string{legacyRoot}
+		}
+	}
+	return &Local{root: filepath.Clean(absolute), fallbackRoots: fallbackRoots}, nil
 }
 
 func (storage *Local) Save(ctx context.Context, relativePath string, source io.Reader, maxBytes int64) (int64, error) {
@@ -70,7 +82,22 @@ func (storage *Local) Open(ctx context.Context, relativePath string) (applicatio
 	if err != nil {
 		return nil, err
 	}
-	return os.Open(target)
+	file, err := os.Open(target)
+	if err == nil || !errors.Is(err, os.ErrNotExist) {
+		return file, err
+	}
+	for _, fallbackRoot := range storage.fallbackRoots {
+		fallbackTarget, resolveErr := resolveUnderRoot(fallbackRoot, relativePath)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		file, fallbackErr := os.Open(fallbackTarget)
+		if fallbackErr == nil || !errors.Is(fallbackErr, os.ErrNotExist) {
+			return file, fallbackErr
+		}
+		err = fallbackErr
+	}
+	return nil, err
 }
 
 func (storage *Local) Delete(ctx context.Context, relativePath string) error {
@@ -82,13 +109,30 @@ func (storage *Local) Delete(ctx context.Context, relativePath string) error {
 		return err
 	}
 	err = os.Remove(target)
-	if errors.Is(err, os.ErrNotExist) {
+	if err == nil {
 		return nil
 	}
-	return err
+	if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	for _, fallbackRoot := range storage.fallbackRoots {
+		fallbackTarget, resolveErr := resolveUnderRoot(fallbackRoot, relativePath)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		fallbackErr := os.Remove(fallbackTarget)
+		if fallbackErr == nil || !errors.Is(fallbackErr, os.ErrNotExist) {
+			return fallbackErr
+		}
+	}
+	return nil
 }
 
 func (storage *Local) resolve(relativePath string) (string, error) {
+	return resolveUnderRoot(storage.root, relativePath)
+}
+
+func resolveUnderRoot(root, relativePath string) (string, error) {
 	if strings.ContainsAny(relativePath, ":\\\x00") || strings.HasPrefix(relativePath, "/") {
 		return "", errors.New("invalid storage path")
 	}
@@ -96,12 +140,12 @@ func (storage *Local) resolve(relativePath string) (string, error) {
 	if clean == "." || filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 		return "", errors.New("invalid storage path")
 	}
-	target := filepath.Join(storage.root, clean)
-	relative, err := filepath.Rel(storage.root, target)
+	target := filepath.Join(root, clean)
+	relative, err := filepath.Rel(root, target)
 	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 		return "", errors.New("storage path escapes data directory")
 	}
-	current := storage.root
+	current := root
 	for _, component := range strings.Split(relative, string(filepath.Separator)) {
 		current = filepath.Join(current, component)
 		info, statErr := os.Lstat(current)
