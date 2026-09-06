@@ -2,18 +2,84 @@ services:
   db:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: centipede
-      POSTGRES_PASSWORD: centipede_dev
-      POSTGRES_DB: centipede
-    ports:
-      - "5434:5432"
+      POSTGRES_USER: ${POSTGRES_USER:-centipede}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-centipede_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-centipede}
     volumes:
       - centipede_postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U centipede -d centipede"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 3s
-      retries: 10
+      retries: 20
+    restart: unless-stopped
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: centipede-api:local
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      APP_ENV: docker
+      CONFIG_SOURCE: file
+      CONFIG_DIR: /config
+      DOTENV_PATH: /dev/null
+      DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-centipede}:${POSTGRES_PASSWORD:-centipede_dev}@db:5432/${POSTGRES_DB:-centipede}?sslmode=disable}
+      DATABASE_MAX_CONNECTIONS: ${DATABASE_MAX_CONNECTIONS:-10}
+      DATABASE_MIN_CONNECTIONS: ${DATABASE_MIN_CONNECTIONS:-2}
+    entrypoint: ["/usr/local/bin/centipede-migrate"]
+    command: ["-dir", "/migrations"]
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: centipede-api:local
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      APP_ENV: docker
+      CONFIG_SOURCE: file
+      CONFIG_DIR: /config
+      DOTENV_PATH: /dev/null
+      SERVER_ADDRESS: ":7788"
+      SERVER_PUBLIC_URL: ${APP_URL:-http://localhost:8080}
+      FRONTEND_BASE_URL: ${APP_URL:-http://localhost:8080}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080,http://127.0.0.1:8080}
+      DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-centipede}:${POSTGRES_PASSWORD:-centipede_dev}@db:5432/${POSTGRES_DB:-centipede}?sslmode=disable}
+      DATABASE_MAX_CONNECTIONS: ${DATABASE_MAX_CONNECTIONS:-10}
+      DATABASE_MIN_CONNECTIONS: ${DATABASE_MIN_CONNECTIONS:-2}
+      JWT_SECRET: ${JWT_SECRET:-centipede-docker-development-secret-change-me-please}
+      LICENSE_SIGNING_SECRET: ${LICENSE_SIGNING_SECRET:-}
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
+      STORAGE_DATA_DIR: /data/storage
+    volumes:
+      - centipede_storage:/data
+      - centipede_logs:/app/logs
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: centipede-frontend:local
+    depends_on:
+      api:
+        condition: service_started
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    environment:
+      API_BASE_URL: ${FRONTEND_API_BASE_URL:-}
+      REALTIME_URL: ${FRONTEND_REALTIME_URL:-}
+      COLLAB_URL: ${FRONTEND_COLLAB_URL:-}
+    restart: unless-stopped
 
 volumes:
   centipede_postgres_data:
+  centipede_storage:
+  centipede_logs:

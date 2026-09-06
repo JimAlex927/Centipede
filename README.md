@@ -72,6 +72,41 @@ Invoke-RestMethod http://localhost:7788/health/live
 Invoke-RestMethod http://localhost:7788/health/ready
 ```
 
+## Docker 一键部署
+
+Docker Compose 会启动 PostgreSQL、自动执行数据库迁移、Go API 和 Nginx
+前端。前端容器同时代理 `/api`、`/collab` 和 `/realtime`，因此浏览器只需要访问一个地址：
+
+```powershell
+docker compose up -d --build
+```
+
+启动完成后访问 <http://localhost:8080>。查看状态和日志：
+
+```powershell
+docker compose ps
+docker compose logs -f api
+```
+
+Compose 默认使用本地开发数据库和 HTTP Cookie，适合内网或本机验证。部署到公网前，建议在项目根目录的 `.env` 中至少覆盖：
+
+```dotenv
+POSTGRES_PASSWORD=请替换为强密码
+JWT_SECRET=请替换为至少32字符的随机密钥
+LICENSE_SIGNING_SECRET=请替换为独立的许可证密钥
+APP_URL=https://docs.example.com
+WEB_PORT=8080
+AUTH_COOKIE_SECURE=true
+```
+
+如需继续使用已有的外部 PostgreSQL，只需将 `DATABASE_URL` 设置为容器可访问的
+连接串；Compose 仍会启动内置数据库，但 API 和迁移服务会优先使用该连接串。
+
+公网 HTTPS 需要在前置网关终止 TLS，并将流量转发到 `${WEB_PORT}`；WebSocket
+升级请求必须保持转发。数据保存在 Compose 命名卷
+`centipede_postgres_data` 和 `centipede_storage` 中，删除容器不会删除这些卷。
+如需停止服务但保留数据，执行 `docker compose down`；不要使用 `docker compose down -v`。
+
 ## Docmost 渐进式迁移
 
 Centipede 支持作为 Docmost 的迁移入口运行。将 `migration.legacy_base_url` 配置为现有 Node 服务地址后，Centipede 自己已经实现的路由优先处理，其余尚未迁移的 HTTP 请求会透明转发到旧服务：

@@ -1,0 +1,40 @@
+server:
+  address: ":7788"
+  public_url: ""
+  cors_origins: []
+  read_header_timeout: "5s"
+  read_timeout: "20s"
+  write_timeout: "20s"
+  idle_timeout: "60s"
+  shutdown_timeout: "10s"
+
+database:
+  url: ""
+  max_connections: 10
+  min_connections: 2
+
+auth:
+  jwt_secret: ""
+  access_token_ttl: "15m"
+  refresh_token_ttl: "720h"
+  refresh_cookie: "centipede_refresh"
+  cookie_secure: false
+
+license:
+  signing_secret: ""
+
+mail:
+  from: ""
+  host: ""
+  port: 587
+  username: ""
+  password: ""
+  tls_mode: "starttls"
+
+storage:
+  data_dir: "/data/storage"
+  max_upload_bytes: 104857600
+
+migration:
+  legacy_base_url: ""
+  frontend_base_url: ""

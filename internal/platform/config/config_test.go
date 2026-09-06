@@ -73,6 +73,33 @@ license:
 	}
 }
 
+func TestEnvironmentOverridesSupportContainerDeployment(t *testing.T) {
+	t.Setenv("SERVER_PUBLIC_URL", "http://localhost:8080")
+	t.Setenv("CORS_ORIGINS", "http://localhost:8080, http://127.0.0.1:8080")
+	t.Setenv("DATABASE_URL", "postgres://container/db")
+	t.Setenv("JWT_SECRET", "container-secret")
+	t.Setenv("AUTH_COOKIE_SECURE", "true")
+	t.Setenv("FRONTEND_BASE_URL", "http://localhost:8080")
+	t.Setenv("STORAGE_DATA_DIR", "/data/storage")
+
+	cfg, err := buildConfig([]byte(validConfigYAML), "docker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Server.PublicURL != "http://localhost:8080" {
+		t.Fatalf("unexpected public URL: %q", cfg.Server.PublicURL)
+	}
+	if len(cfg.Server.CORSOrigins) != 2 || cfg.Server.CORSOrigins[1] != "http://127.0.0.1:8080" {
+		t.Fatalf("unexpected CORS origins: %#v", cfg.Server.CORSOrigins)
+	}
+	if cfg.Database.URL != "postgres://container/db" || cfg.Auth.JWTSecret != "container-secret" {
+		t.Fatalf("container overrides were not applied: %#v", cfg)
+	}
+	if !cfg.Auth.CookieSecure || cfg.Migration.FrontendBaseURL != "http://localhost:8080" || cfg.Storage.DataDir != "/data/storage" {
+		t.Fatalf("unexpected container settings: %#v", cfg)
+	}
+}
+
 func TestPDFOCRConfigRequiresBothCommands(t *testing.T) {
 	_, err := buildConfig([]byte(validConfigYAML+`
 pdf_ocr:

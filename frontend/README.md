@@ -35,3 +35,8 @@ pnpm preview
 The generated files are in `dist/`. A production reverse proxy must forward
 `/api`, `/collab`, and `/realtime` to the Go backend, including WebSocket
 upgrade requests for the latter two paths.
+
+The repository root also provides a complete Docker Compose deployment. Run
+`docker compose up -d --build` from the repository root to build the frontend
+and Go backend, run migrations against the bundled PostgreSQL service, and
+serve the application at `http://localhost:8080`.

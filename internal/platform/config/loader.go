@@ -6,6 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"strconv"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -49,6 +52,9 @@ func LoadDatabase(ctx context.Context) (DatabaseConfig, error) {
 	if err != nil {
 		return DatabaseConfig{}, err
 	}
+	if err := applyEnvironmentOverrides(&raw); err != nil {
+		return DatabaseConfig{}, err
+	}
 	database := DatabaseConfig{URL: raw.Database.URL, MaxConnections: raw.Database.MaxConnections, MinConnections: raw.Database.MinConnections}
 	if err := database.Validate(); err != nil {
 		return DatabaseConfig{}, err
@@ -76,7 +82,93 @@ func buildConfig(content []byte, environment string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	if err := applyEnvironmentOverrides(&raw); err != nil {
+		return Config{}, err
+	}
 	return raw.build(environment)
+}
+
+// applyEnvironmentOverrides keeps the profile YAML useful for local and
+// Nacos deployments while allowing container platforms to inject connection,
+// URL and secret settings without baking them into an image. Empty variables
+// are ignored so existing profile values continue to work unchanged.
+func applyEnvironmentOverrides(raw *rawConfig) error {
+	if value := strings.TrimSpace(os.Getenv("SERVER_ADDRESS")); value != "" {
+		raw.Server.Address = value
+	}
+	if value := strings.TrimSpace(os.Getenv("SERVER_PUBLIC_URL")); value != "" {
+		raw.Server.PublicURL = value
+	}
+	if value := strings.TrimSpace(os.Getenv("CORS_ORIGINS")); value != "" {
+		raw.Server.CORSOrigins = splitEnvironmentList(value)
+	}
+	if value := strings.TrimSpace(os.Getenv("DATABASE_URL")); value != "" {
+		raw.Database.URL = value
+	}
+	if value := strings.TrimSpace(os.Getenv("DATABASE_MAX_CONNECTIONS")); value != "" {
+		parsed, err := strconv.ParseInt(value, 10, 32)
+		if err != nil {
+			return fmt.Errorf("DATABASE_MAX_CONNECTIONS must be an integer: %w", err)
+		}
+		raw.Database.MaxConnections = int32(parsed)
+	}
+	if value := strings.TrimSpace(os.Getenv("DATABASE_MIN_CONNECTIONS")); value != "" {
+		parsed, err := strconv.ParseInt(value, 10, 32)
+		if err != nil {
+			return fmt.Errorf("DATABASE_MIN_CONNECTIONS must be an integer: %w", err)
+		}
+		raw.Database.MinConnections = int32(parsed)
+	}
+	if value := strings.TrimSpace(os.Getenv("JWT_SECRET")); value != "" {
+		raw.Auth.JWTSecret = value
+	}
+	if value := strings.TrimSpace(os.Getenv("AUTH_ACCESS_TOKEN_TTL")); value != "" {
+		raw.Auth.AccessTokenTTL = value
+	}
+	if value := strings.TrimSpace(os.Getenv("AUTH_REFRESH_TOKEN_TTL")); value != "" {
+		raw.Auth.RefreshTokenTTL = value
+	}
+	if value := strings.TrimSpace(os.Getenv("AUTH_REFRESH_COOKIE")); value != "" {
+		raw.Auth.RefreshCookie = value
+	}
+	if value := strings.TrimSpace(os.Getenv("AUTH_COOKIE_SECURE")); value != "" {
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("AUTH_COOKIE_SECURE must be a boolean: %w", err)
+		}
+		raw.Auth.CookieSecure = parsed
+	}
+	if value := strings.TrimSpace(os.Getenv("LICENSE_SIGNING_SECRET")); value != "" {
+		raw.License.SigningSecret = value
+	}
+	if value := strings.TrimSpace(os.Getenv("STORAGE_DATA_DIR")); value != "" {
+		raw.Storage.DataDir = value
+	}
+	if value := strings.TrimSpace(os.Getenv("STORAGE_MAX_UPLOAD_BYTES")); value != "" {
+		parsed, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			return fmt.Errorf("STORAGE_MAX_UPLOAD_BYTES must be an integer: %w", err)
+		}
+		raw.Storage.MaxUploadBytes = parsed
+	}
+	if value := strings.TrimSpace(os.Getenv("FRONTEND_BASE_URL")); value != "" {
+		raw.Migration.FrontendBaseURL = value
+	}
+	if value := strings.TrimSpace(os.Getenv("LEGACY_BASE_URL")); value != "" {
+		raw.Migration.LegacyBaseURL = value
+	}
+	return nil
+}
+
+func splitEnvironmentList(value string) []string {
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
 }
 
 func (loader *Loader) loadContent(ctx context.Context, bootstrap BootstrapConfig) ([]byte, error) {
