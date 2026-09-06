@@ -42,7 +42,10 @@ export function getRealtimeUrl(): string {
 }
 
 export function getRealtimeWebSocketUrl(): string {
-  const baseUrl = getConfigValue("REALTIME_URL") || getBackendOrigin();
+  // The Docker frontend proxies /realtime to Go. Using the current page
+  // origin also makes LAN access work without hard-coding the browser host.
+  // A dedicated realtime URL remains available for separately hosted setups.
+  const baseUrl = getConfigValue("REALTIME_URL") || getAppUrl();
   const realtimeUrl = new URL("/realtime", baseUrl);
   if (realtimeUrl.protocol === "https:") realtimeUrl.protocol = "wss:";
   if (realtimeUrl.protocol === "http:") realtimeUrl.protocol = "ws:";
@@ -55,7 +58,10 @@ export function getCollaborationUrl(roomName?: string): string {
   // only serves static files and the Hocuspocus handshake then fails with a
   // generic "real-time editor connection lost" message.  COLLAB_URL remains
   // available for a dedicated websocket gateway.
-  const baseUrl = getConfigValue("COLLAB_URL") || getBackendOrigin();
+  // The standalone frontend and Docker Nginx both proxy /collab. Keep the
+  // default same-origin so the backend can validate the WebSocket Origin
+  // without requiring every LAN IP to be listed in configuration.
+  const baseUrl = getConfigValue("COLLAB_URL") || getAppUrl();
 
   const collabUrl = new URL(
     roomName ? `/collab/${encodeURIComponent(roomName)}` : "/collab",

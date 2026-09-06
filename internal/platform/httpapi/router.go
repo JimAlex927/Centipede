@@ -36,6 +36,11 @@ func NewRouter(cfg config.Config, database *pgxpool.Pool, logger *zap.Logger) ht
 	if cfg.Migration.FrontendBaseURL != "" {
 		allowedOrigins = append(allowedOrigins, cfg.Migration.FrontendBaseURL)
 	}
+	// The frontend URL is needed for credentialed REST CORS and invitation
+	// links, but it should not force the WebSocket server into a static-origin
+	// mode. Empty websocket origins make ygo perform a same-origin check, which
+	// supports Docker access through localhost, LAN IPs and reverse proxies.
+	websocketOrigins := append([]string{}, cfg.Server.CORSOrigins...)
 	engine.Use(gin.Recovery(), requestID(), requestLogger(logger), securityHeaders(), cors(allowedOrigins))
 	engine.GET("/", func(c *gin.Context) {
 		c.String(http.StatusOK, "Hello World!")
@@ -73,13 +78,13 @@ func NewRouter(cfg config.Config, database *pgxpool.Pool, logger *zap.Logger) ht
 		defer cancel()
 		docmostHandler.ResumePendingZipImports(ctx)
 	}()
-	collaborationHandler := docmosthttp.NewCollaborationHandler(docmostRepository, cfg.Auth.JWTSecret, allowedOrigins)
+	collaborationHandler := docmosthttp.NewCollaborationHandler(docmostRepository, cfg.Auth.JWTSecret, websocketOrigins)
 	engine.Any("/collab/:room", gin.WrapH(collaborationHandler))
 	engine.GET("/api/collab/stats", func(c *gin.Context) {
 		connections, documents := collaborationHandler.Stats()
 		c.JSON(http.StatusOK, gin.H{"connections": connections, "documents": documents})
 	})
-	realtimeHandler := docmosthttp.NewRealtimeHandler(docmostRepository, cfg.Auth.JWTSecret, allowedOrigins)
+	realtimeHandler := docmosthttp.NewRealtimeHandler(docmostRepository, cfg.Auth.JWTSecret, websocketOrigins)
 	docmostHandler.SetRealtimeHandler(realtimeHandler)
 	collaborationHandler.SetRealtimeHandler(realtimeHandler)
 	collaborationHandler.SetNotificationEmailEnqueuer(docmostHandler.EnqueueNotificationEmail)

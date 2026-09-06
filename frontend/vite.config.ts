@@ -73,12 +73,12 @@ export default defineConfig(({ mode }) => {
         "/collab": {
           target: backendUrl,
           ws: true,
-          rewriteWsOrigin: true,
+          rewriteWsOrigin: false,
         },
         "/realtime": {
           target: backendUrl,
           ws: true,
-          rewriteWsOrigin: true,
+          rewriteWsOrigin: false,
         },
       },
     },
@@ -94,12 +94,12 @@ export default defineConfig(({ mode }) => {
         "/collab": {
           target: backendUrl,
           ws: true,
-          rewriteWsOrigin: true,
+          rewriteWsOrigin: false,
         },
         "/realtime": {
           target: backendUrl,
           ws: true,
-          rewriteWsOrigin: true,
+          rewriteWsOrigin: false,
         },
       },
     },

@@ -167,6 +167,12 @@ func (handler *RealtimeHandler) checkOrigin(request *http.Request) bool {
 	if origin == "" {
 		return true
 	}
+	// Same-origin access is valid regardless of the configured cross-origin
+	// allowlist. This is important for Docker deployments accessed through a
+	// LAN IP or a reverse proxy whose host is not known at build time.
+	if origin == "http://"+request.Host || origin == "https://"+request.Host {
+		return true
+	}
 	if len(handler.allowedOrigins) > 0 {
 		_, ok := handler.allowedOrigins[origin]
 		return ok

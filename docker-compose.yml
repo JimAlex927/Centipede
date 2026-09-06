@@ -61,7 +61,7 @@ services:
       SERVER_ADDRESS: ":7788"
       SERVER_PUBLIC_URL: ${APP_URL:-http://localhost:8080}
       FRONTEND_BASE_URL: ${APP_URL:-http://localhost:8080}
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080,http://127.0.0.1:8080}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
       DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-centipede}:${POSTGRES_PASSWORD:-centipede_dev}@db:5432/${POSTGRES_DB:-centipede}?sslmode=disable}
       DATABASE_MAX_CONNECTIONS: ${DATABASE_MAX_CONNECTIONS:-10}
       DATABASE_MIN_CONNECTIONS: ${DATABASE_MIN_CONNECTIONS:-2}
