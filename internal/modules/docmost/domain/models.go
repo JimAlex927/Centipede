@@ -24,7 +24,7 @@ type Workspace struct {
 	TrashRetentionDays int             `json:"trashRetentionDays"`
 	CreatedAt          time.Time       `json:"createdAt"`
 	UpdatedAt          time.Time       `json:"updatedAt"`
-	MemberCount        int64           `json:"memberCount,omitempty"`
+	MemberCount        int64           `json:"memberCount"`
 }
 
 type User struct {
@@ -62,7 +62,7 @@ type Space struct {
 	IsPersonal  bool            `json:"isPersonal"`
 	CreatedAt   time.Time       `json:"createdAt"`
 	UpdatedAt   time.Time       `json:"updatedAt"`
-	MemberCount int64           `json:"memberCount,omitempty"`
+	MemberCount int64           `json:"memberCount"`
 	Membership  *Membership     `json:"membership,omitempty"`
 }
 
@@ -112,8 +112,8 @@ type PagePermissionMember struct {
 	Type        string    `json:"type"`
 	Email       string    `json:"email,omitempty"`
 	AvatarURL   *string   `json:"avatarUrl,omitempty"`
-	MemberCount int64     `json:"memberCount,omitempty"`
-	IsDefault   bool      `json:"isDefault,omitempty"`
+	MemberCount int64     `json:"memberCount"`
+	IsDefault   bool      `json:"isDefault"`
 }
 
 type UserSummary struct {
@@ -248,8 +248,8 @@ type SpaceMember struct {
 	AvatarURL   *string `json:"avatarUrl,omitempty"`
 	Type        string  `json:"type"`
 	Role        string  `json:"role"`
-	IsDefault   bool    `json:"isDefault,omitempty"`
-	MemberCount int64   `json:"memberCount,omitempty"`
+	IsDefault   bool    `json:"isDefault"`
+	MemberCount int64   `json:"memberCount"`
 }
 
 type Invitation struct {
@@ -262,7 +262,7 @@ type Invitation struct {
 	GroupIDs    []string  `json:"groupIds,omitempty"`
 	CreatedAt   time.Time `json:"createdAt"`
 	UpdatedAt   time.Time `json:"updatedAt,omitempty"`
-	EnforceSSO  bool      `json:"enforceSso,omitempty"`
+	EnforceSSO  bool      `json:"enforceSso"`
 }
 
 type BacklinkPage struct {
@@ -307,7 +307,7 @@ type Share struct {
 	CreatedAt       time.Time     `json:"createdAt"`
 	UpdatedAt       time.Time     `json:"updatedAt"`
 	DeletedAt       *time.Time    `json:"deletedAt"`
-	Level           int           `json:"level,omitempty"`
+	Level           int           `json:"level"`
 	SharedPage      *PageSummary  `json:"sharedPage,omitempty"`
 	Page            *PageSummary  `json:"page,omitempty"`
 	Space           *SpaceSummary `json:"space,omitempty"`
