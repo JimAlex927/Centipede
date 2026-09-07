@@ -151,6 +151,22 @@ func applyEnvironmentOverrides(raw *rawConfig) error {
 		}
 		raw.Storage.MaxUploadBytes = parsed
 	}
+	if value := strings.TrimSpace(os.Getenv("COLLAB_ROOM_IDLE_TIMEOUT")); value != "" {
+		raw.Collaboration.RoomIdleTimeout = value
+	}
+	if value := strings.TrimSpace(os.Getenv("COLLAB_MAX_RESIDENT_ROOMS")); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("COLLAB_MAX_RESIDENT_ROOMS must be an integer: %w", err)
+		}
+		raw.Collaboration.MaxResidentRooms = parsed
+	}
+	if value := strings.TrimSpace(os.Getenv("COLLAB_PERSIST_COALESCE_WINDOW")); value != "" {
+		raw.Collaboration.PersistCoalesceWindow = value
+	}
+	if value := strings.TrimSpace(os.Getenv("COLLAB_PERSIST_COALESCE_MAX_WAIT")); value != "" {
+		raw.Collaboration.PersistCoalesceMaxWait = value
+	}
 	if value := strings.TrimSpace(os.Getenv("FRONTEND_BASE_URL")); value != "" {
 		raw.Migration.FrontendBaseURL = value
 	}

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"centipede/internal/modules/docmost/adapter/out/postgres"
+	platformconfig "centipede/internal/platform/config"
 
 	ygows "github.com/reearth/ygo/provider/websocket"
 )
@@ -52,9 +53,16 @@ func (handler *CollaborationHandler) Stats() (connections, documents int64) {
 // NewCollaborationHandler creates the Hocuspocus-compatible Yjs websocket
 // handler used by the standalone frontend. It is intentionally separate from
 // the REST handler because ygo owns the websocket room lifecycle.
-func NewCollaborationHandler(repository *postgres.Repository, secret string, allowedOrigins []string) *CollaborationHandler {
+func NewCollaborationHandler(repository *postgres.Repository, secret string, allowedOrigins []string, collaborationConfig platformconfig.CollaborationConfig) *CollaborationHandler {
 	store := repository.CollaborationStore()
 	server := ygows.NewServerWithPersistence(store)
+	// Keep recently visited pages warm. YGo still flushes pending updates before
+	// marking a room idle, so this only avoids the next LoadDoc/rebuild cycle;
+	// it does not weaken durability. MaxResidentRooms bounds the memory cost.
+	server.RoomIdleTimeout = collaborationConfig.RoomIdleTimeout
+	server.MaxResidentRooms = collaborationConfig.MaxResidentRooms
+	server.PersistCoalesceWindow = collaborationConfig.PersistCoalesceWindow
+	server.PersistCoalesceMaxWait = collaborationConfig.PersistCoalesceMaxWait
 	handler := &CollaborationHandler{server: server, store: store}
 	store.SetVersionCallback(func(ctx context.Context, pageID, workspaceID string, actorIDs []string, content []byte) {
 		actorID := ""

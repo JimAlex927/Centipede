@@ -40,6 +40,13 @@ storage:
   data_dir: "./data/storage"
   max_upload_bytes: 104857600
 
+collaboration:
+  # Keep recently visited page documents warm while bounding memory usage.
+  room_idle_timeout: "5m"
+  max_resident_rooms: 256
+  persist_coalesce_window: "2s"
+  persist_coalesce_max_wait: "10s"
+
 # Optional OpenAI-compatible AI provider. Set embedding_model to enable the
 # asynchronous semantic index; keyword search remains the fallback.
 # ai:

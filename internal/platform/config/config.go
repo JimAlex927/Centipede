@@ -10,17 +10,18 @@ import (
 )
 
 type Config struct {
-	Environment string
-	Server      ServerConfig
-	Database    DatabaseConfig
-	Auth        AuthConfig
-	License     LicenseConfig
-	Mail        MailConfig
-	Storage     StorageConfig
-	AI          AIConfig
-	PDFOCR      PDFOCRConfig
-	SSO         SSOConfig
-	Migration   MigrationConfig
+	Environment   string
+	Server        ServerConfig
+	Database      DatabaseConfig
+	Auth          AuthConfig
+	License       LicenseConfig
+	Mail          MailConfig
+	Storage       StorageConfig
+	Collaboration CollaborationConfig
+	AI            AIConfig
+	PDFOCR        PDFOCRConfig
+	SSO           SSOConfig
+	Migration     MigrationConfig
 }
 
 type ServerConfig struct {
@@ -80,6 +81,16 @@ type AuthConfig struct {
 	RefreshTokenTTL time.Duration
 	RefreshCookie   string
 	CookieSecure    bool
+}
+
+// CollaborationConfig controls the in-memory lifecycle of Yjs collaboration
+// rooms. Keeping recently used rooms warm avoids reloading and rebuilding a
+// document on every page switch, while MaxResidentRooms bounds memory usage.
+type CollaborationConfig struct {
+	RoomIdleTimeout        time.Duration
+	MaxResidentRooms       int
+	PersistCoalesceWindow  time.Duration
+	PersistCoalesceMaxWait time.Duration
 }
 
 // LicenseConfig holds the key used to sign self-hosted enterprise licenses.
@@ -153,6 +164,12 @@ type rawConfig struct {
 		DataDir        string `yaml:"data_dir"`
 		MaxUploadBytes int64  `yaml:"max_upload_bytes"`
 	} `yaml:"storage"`
+	Collaboration struct {
+		RoomIdleTimeout        string `yaml:"room_idle_timeout"`
+		MaxResidentRooms       int    `yaml:"max_resident_rooms"`
+		PersistCoalesceWindow  string `yaml:"persist_coalesce_window"`
+		PersistCoalesceMaxWait string `yaml:"persist_coalesce_max_wait"`
+	} `yaml:"collaboration"`
 	AI struct {
 		Driver          string `yaml:"driver"`
 		BaseURL         string `yaml:"base_url"`
@@ -212,6 +229,32 @@ func (raw rawConfig) build(environment string) (Config, error) {
 		return Config{}, err
 	}
 
+	collaborationRoomIdleTimeout := 5 * time.Minute
+	if strings.TrimSpace(raw.Collaboration.RoomIdleTimeout) != "" {
+		collaborationRoomIdleTimeout, err = parseDuration("collaboration.room_idle_timeout", raw.Collaboration.RoomIdleTimeout)
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	collaborationPersistCoalesceWindow := 2 * time.Second
+	if strings.TrimSpace(raw.Collaboration.PersistCoalesceWindow) != "" {
+		collaborationPersistCoalesceWindow, err = parseDuration("collaboration.persist_coalesce_window", raw.Collaboration.PersistCoalesceWindow)
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	collaborationPersistCoalesceMaxWait := 10 * time.Second
+	if strings.TrimSpace(raw.Collaboration.PersistCoalesceMaxWait) != "" {
+		collaborationPersistCoalesceMaxWait, err = parseDuration("collaboration.persist_coalesce_max_wait", raw.Collaboration.PersistCoalesceMaxWait)
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	maxResidentRooms := raw.Collaboration.MaxResidentRooms
+	if maxResidentRooms == 0 {
+		maxResidentRooms = 256
+	}
+
 	result := Config{
 		Environment: environment,
 		Server: ServerConfig{
@@ -243,6 +286,12 @@ func (raw rawConfig) build(environment string) (Config, error) {
 			Password: raw.Mail.Password, TLSMode: strings.ToLower(fallback(raw.Mail.TLSMode, "starttls")),
 		},
 		Storage: StorageConfig{DataDir: fallback(raw.Storage.DataDir, "./data"), MaxUploadBytes: raw.Storage.MaxUploadBytes},
+		Collaboration: CollaborationConfig{
+			RoomIdleTimeout:        collaborationRoomIdleTimeout,
+			MaxResidentRooms:       maxResidentRooms,
+			PersistCoalesceWindow:  collaborationPersistCoalesceWindow,
+			PersistCoalesceMaxWait: collaborationPersistCoalesceMaxWait,
+		},
 		SSO: SSOConfig{
 			IssuerURL:   strings.TrimSpace(raw.SSO.IssuerURL),
 			ClientID:    strings.TrimSpace(raw.SSO.ClientID),
@@ -326,6 +375,10 @@ func (config Config) Validate() error {
 	}
 	if config.Storage.DataDir == "" || config.Storage.MaxUploadBytes <= 0 {
 		return errors.New("storage.data_dir and a positive storage.max_upload_bytes are required")
+	}
+	if config.Collaboration.RoomIdleTimeout <= 0 || config.Collaboration.MaxResidentRooms <= 0 ||
+		config.Collaboration.PersistCoalesceWindow <= 0 || config.Collaboration.PersistCoalesceMaxWait < config.Collaboration.PersistCoalesceWindow {
+		return errors.New("collaboration room and persistence settings are invalid")
 	}
 	if (config.PDFOCR.TesseractPath == "") != (config.PDFOCR.PDFToPNGPath == "") {
 		return errors.New("pdf_ocr.tesseract_path and pdf_ocr.pdftoppm_path must be configured together")

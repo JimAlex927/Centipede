@@ -55,6 +55,10 @@ func TestBuildConfigFromYAML(t *testing.T) {
 	if cfg.PDFOCR.Timeout != 2*time.Minute || cfg.PDFOCR.MaxPages != 32 || cfg.PDFOCR.Language != "eng" {
 		t.Fatalf("unexpected default PDF OCR config: %#v", cfg.PDFOCR)
 	}
+	if cfg.Collaboration.RoomIdleTimeout != 5*time.Minute || cfg.Collaboration.MaxResidentRooms != 256 ||
+		cfg.Collaboration.PersistCoalesceWindow != 2*time.Second || cfg.Collaboration.PersistCoalesceMaxWait != 10*time.Second {
+		t.Fatalf("unexpected default collaboration config: %#v", cfg.Collaboration)
+	}
 }
 
 func TestLicenseSigningSecretCanBeSeparateFromJWT(t *testing.T) {

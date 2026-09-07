@@ -51,6 +51,15 @@ storage:
   data_dir: "./data/storage"
   max_upload_bytes: 104857600
 
+collaboration:
+  # Keep recently visited page documents in memory so a page switch does not
+  # reload and rebuild the Yjs document from PostgreSQL.
+  room_idle_timeout: "5m"
+  max_resident_rooms: 256
+  # Merge bursts of editor updates before writing the durable page projection.
+  persist_coalesce_window: "2s"
+  persist_coalesce_max_wait: "10s"
+
 # Optional OpenAI-compatible AI provider. Credentials can also be supplied in .env.
 # ai:
 #   base_url: "http://127.0.0.1:11434/v1"
