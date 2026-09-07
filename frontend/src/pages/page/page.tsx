@@ -10,7 +10,7 @@ import { useTranslation } from "react-i18next";
 import React from "react";
 import { EmptyState } from "@/components/ui/empty-state.tsx";
 import { IconAlertTriangle, IconFileOff } from "@tabler/icons-react";
-import { Button } from "@mantine/core";
+import { Button, Loader } from "@mantine/core";
 import { Link } from "react-router-dom";
 import { ErrorBoundary } from "react-error-boundary";
 import { BaseView } from "@/ee/base/components/base-view";
@@ -35,7 +35,12 @@ export default function Page() {
           icon={IconAlertTriangle}
           title={t("Failed to load page. An error occurred.")}
           action={
-            <Button variant="default" size="sm" mt="xs" onClick={resetErrorBoundary}>
+            <Button
+              variant="default"
+              size="sm"
+              mt="xs"
+              onClick={resetErrorBoundary}
+            >
               {t("Try again")}
             </Button>
           }
@@ -53,6 +58,7 @@ function PageContent({ pageSlug }: { pageSlug: string | undefined }) {
   const {
     data: page,
     isLoading,
+    isFetching,
     isError,
     error,
   } = usePageQuery({ pageId: extractPageSlugId(pageSlug) });
@@ -61,11 +67,10 @@ function PageContent({ pageSlug }: { pageSlug: string | undefined }) {
   const hasBases = useHasFeature(Feature.BASES);
   const canEdit = !page?.deletedAt && (page?.permissions?.canEdit ?? false);
   const canComment =
-    canEdit ||
-    (space?.settings?.comments?.allowViewerComments === true);
+    canEdit || space?.settings?.comments?.allowViewerComments === true;
 
-  if (isLoading) {
-    return <></>;
+  if (isLoading && !page) {
+    return <PageLoadingState />;
   }
 
   if (isError || !page) {
@@ -78,7 +83,13 @@ function PageContent({ pageSlug }: { pageSlug: string | undefined }) {
             "This page may have been deleted, moved, or you may not have access.",
           )}
           action={
-            <Button component={Link} to="/home" variant="default" size="sm" mt="xs">
+            <Button
+              component={Link}
+              to="/home"
+              variant="default"
+              size="sm"
+              mt="xs"
+            >
               {t("Go to homepage")}
             </Button>
           }
@@ -86,10 +97,7 @@ function PageContent({ pageSlug }: { pageSlug: string | undefined }) {
       );
     }
     return (
-      <EmptyState
-        icon={IconFileOff}
-        title={t("Error fetching page data.")}
-      />
+      <EmptyState icon={IconFileOff} title={t("Error fetching page data.")} />
     );
   }
 
@@ -99,67 +107,69 @@ function PageContent({ pageSlug }: { pageSlug: string | undefined }) {
 
   if (page?.isBase) {
     return (
-      <div
-        className="base-page-root"
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          // Height: see `.base-page-root` in core.css.
-          // Clear the fixed PageHeader (breadcrumb) plus a little extra so the
-          // pinned column-header row isn't tucked half under it.
-          paddingTop: "calc(var(--page-header-height) + 6px)",
-        }}
-      >
-        <DocumentTitle
-          title={`${page?.icon || ""}  ${getPageTitle(page?.title, page?.isBase, t)}`}
-          withAppName={false}
-        />
-        <MemoizedPageHeader readOnly={!canEdit} />
+      <PageTransition loading={isFetching}>
         <div
+          className="base-page-root"
           style={{
-            flex: 1,
-            minHeight: 0,
             display: "flex",
             flexDirection: "column",
-            paddingInline: 24,
+            // Height: see `.base-page-root` in core.css.
+            // Clear the fixed PageHeader (breadcrumb) plus a little extra so the
+            // pinned column-header row isn't tucked half under it.
+            paddingTop: "calc(var(--page-header-height) + 6px)",
           }}
         >
+          <DocumentTitle
+            title={`${page?.icon || ""}  ${getPageTitle(page?.title, page?.isBase, t)}`}
+            withAppName={false}
+          />
+          <MemoizedPageHeader readOnly={!canEdit} />
           <div
             style={{
               flex: 1,
               minHeight: 0,
               display: "flex",
               flexDirection: "column",
+              paddingInline: 24,
             }}
           >
-            <BaseView
-              pageId={page.id}
-              editable={hasBases && canEdit}
-              titleSlot={
-                <div
-                  className="base-page-title"
-                  style={{ paddingTop: 2, paddingBottom: 6 }}
-                >
-                  <MemoizedTitleEditor
-                    pageId={page.id}
-                    slugId={page.slugId}
-                    title={page.title}
-                    spaceSlug={page.space?.slug ?? ""}
-                    editable={hasBases && canEdit}
-                    isBase
-                  />
-                </div>
-              }
-            />
+            <div
+              style={{
+                flex: 1,
+                minHeight: 0,
+                display: "flex",
+                flexDirection: "column",
+              }}
+            >
+              <BaseView
+                pageId={page.id}
+                editable={hasBases && canEdit}
+                titleSlot={
+                  <div
+                    className="base-page-title"
+                    style={{ paddingTop: 2, paddingBottom: 6 }}
+                  >
+                    <MemoizedTitleEditor
+                      pageId={page.id}
+                      slugId={page.slugId}
+                      title={page.title}
+                      spaceSlug={page.space?.slug ?? ""}
+                      editable={hasBases && canEdit}
+                      isBase
+                    />
+                  </div>
+                }
+              />
+            </div>
           </div>
         </div>
-      </div>
+      </PageTransition>
     );
   }
 
   return (
     page && (
-      <div>
+      <PageTransition loading={isFetching}>
         <DocumentTitle
           title={`${page?.icon || ""}  ${getPageTitle(page?.title, page?.isBase, t)}`}
           withAppName={false}
@@ -180,7 +190,53 @@ function PageContent({ pageSlug }: { pageSlug: string | undefined }) {
           canComment={canComment}
         />
         <MemoizedHistoryModal pageId={page.id} />
-      </div>
+      </PageTransition>
     )
+  );
+}
+
+function PageLoadingState() {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      style={{
+        display: "flex",
+        justifyContent: "center",
+        paddingTop: "var(--page-header-height)",
+      }}
+    >
+      <Loader size="sm" />
+    </div>
+  );
+}
+
+function PageTransition({
+  loading,
+  children,
+}: {
+  loading: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <div style={{ position: "relative", minHeight: "100%" }}>
+      {loading && (
+        <div
+          role="status"
+          aria-label="Loading page"
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            height: 2,
+            zIndex: 1100,
+            background: "var(--mantine-color-blue-6)",
+            opacity: 0.9,
+          }}
+        />
+      )}
+      {children}
+    </div>
   );
 }
