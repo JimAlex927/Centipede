@@ -123,7 +123,7 @@ func (handler *Handler) uploadFile(c *gin.Context) {
 		writeError(c, http.StatusInternalServerError, "Failed to save attachment metadata")
 		return
 	}
-	attachment.URL = handler.fileURL(c, attachment)
+	attachment.URL = handler.fileURL(attachment)
 	handler.scheduleAttachmentIndex(attachment)
 	// The upstream upload endpoint returns the attachment itself, rather than
 	// the API envelope used by most JSON endpoints. The editor upload helpers
@@ -217,7 +217,7 @@ func (handler *Handler) uploadImage(c *gin.Context) {
 		writeError(c, http.StatusInternalServerError, "Failed to save image metadata")
 		return
 	}
-	attachment.URL = handler.imageURL(c, attachment)
+	attachment.URL = handler.imageURL(attachment)
 	switch attachmentType {
 	case "avatar":
 		err = handler.repository.SetUserAvatar(c.Request.Context(), current.User.ID, current.Workspace.ID, attachment.FileName)
@@ -259,7 +259,7 @@ func (handler *Handler) attachmentInfo(c *gin.Context) {
 	if !handler.requireSpaceRole(c, pageValue.SpaceID, "reader") {
 		return
 	}
-	attachment.URL = handler.fileURL(c, attachment)
+	attachment.URL = handler.fileURL(attachment)
 	writeData(c, http.StatusOK, attachment)
 }
 
@@ -286,7 +286,7 @@ func (handler *Handler) pageAttachments(c *gin.Context) {
 		return
 	}
 	for index := range result.Items {
-		result.Items[index].URL = handler.fileURL(c, result.Items[index])
+		result.Items[index].URL = handler.fileURL(result.Items[index])
 	}
 	writeData(c, http.StatusOK, result)
 }
@@ -461,16 +461,19 @@ func (handler *Handler) removeIcon(c *gin.Context) {
 	writeData(c, http.StatusOK, nil)
 }
 
-func (handler *Handler) fileURL(c *gin.Context, attachment domain.Attachment) string {
-	return handler.backendURL(c) + "/api/files/" + url.PathEscape(attachment.ID) + "/" + url.PathEscape(attachment.FileName)
+func (handler *Handler) fileURL(attachment domain.Attachment) string {
+	// Attachment URLs are consumed by the browser. Keep them relative to the
+	// current host so a default localhost public URL cannot leak into content
+	// that is opened through a LAN address or reverse proxy.
+	return "/api/files/" + url.PathEscape(attachment.ID) + "/" + url.PathEscape(attachment.FileName)
 }
 
-func (handler *Handler) imageURL(c *gin.Context, attachment domain.Attachment) string {
+func (handler *Handler) imageURL(attachment domain.Attachment) string {
 	attachmentType := "file"
 	if attachment.Type != nil && *attachment.Type != "" {
 		attachmentType = *attachment.Type
 	}
-	return handler.backendURL(c) + "/api/attachments/img/" + url.PathEscape(attachmentType) + "/" + url.PathEscape(attachment.FileName)
+	return "/api/attachments/img/" + url.PathEscape(attachmentType) + "/" + url.PathEscape(attachment.FileName)
 }
 
 func (handler *Handler) backendURL(c *gin.Context) string {

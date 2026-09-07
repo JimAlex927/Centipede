@@ -24,7 +24,10 @@ export function getServerAppUrl(): string {
 export function getBackendUrl(): string {
   // API_BASE_URL is the preferred explicit setting. APP_URL is kept as the
   // documented backend-origin fallback for a separately served frontend.
-  return getConfigValue("API_BASE_URL", `${getServerAppUrl() || getAppUrl()}/api`).replace(/\/$/, "");
+  return getConfigValue(
+    "API_BASE_URL",
+    `${getServerAppUrl() || getAppUrl()}/api`,
+  ).replace(/\/$/, "");
 }
 
 export function getApiUrl(path: string): string {
@@ -111,13 +114,29 @@ export function getFileUrl(src: string) {
   const sourcePath = parsed.pathname;
   const suffix = `${parsed.search}${parsed.hash}`;
 
+  const isInternalAttachmentPath =
+    sourcePath.startsWith("/api/files/") ||
+    sourcePath.startsWith("/files/") ||
+    sourcePath.startsWith("/api/attachments/img/");
+  const isLocalHost = ["localhost", "127.0.0.1", "::1"].includes(
+    parsed.hostname,
+  );
+
   // Absolute URLs can be left over from the Node service or an older Go
   // instance. Rewrite only known attachment paths, and only when the user
-  // configured a backend origin; unrelated external URLs must remain intact.
+  // configured a backend origin. A localhost attachment URL is also safe to
+  // rewrite without explicit configuration because it cannot be a meaningful
+  // public origin for a remote browser.
   const configuredBackend = Boolean(
     getConfigValue("API_BASE_URL") || getConfigValue("APP_URL"),
   );
-  if (sourceIsAbsolute && !configuredBackend) return sanitizeUrl(src);
+  if (
+    sourceIsAbsolute &&
+    !configuredBackend &&
+    (!isInternalAttachmentPath || !isLocalHost)
+  ) {
+    return sanitizeUrl(src);
+  }
 
   // Older Go-imported pages can persist the storage path instead of the
   // public API path, for example:
@@ -144,6 +163,10 @@ export function getFileUrl(src: string) {
     // Remove the '/api' prefix
     return getBackendUrl() + sourcePath.substring(4) + suffix;
   }
+  if (sourcePath.startsWith("/api/attachments/")) {
+    // Remove the '/api' prefix, matching the backend URL convention.
+    return getBackendUrl() + sourcePath.substring(4) + suffix;
+  }
   if (sourcePath.startsWith("/files/")) {
     return getBackendUrl() + sourcePath + suffix;
   }
@@ -155,7 +178,8 @@ export function getAttachmentFileUrl(attachment: {
   fileName: string;
   url?: string;
 }): string {
-  const serverUrl = typeof attachment.url === "string" ? attachment.url.trim() : "";
+  const serverUrl =
+    typeof attachment.url === "string" ? attachment.url.trim() : "";
   if (serverUrl) return getFileUrl(serverUrl);
 
   return getFileUrl(
@@ -163,7 +187,10 @@ export function getAttachmentFileUrl(attachment: {
   );
 }
 
-export function appendCacheBust(src: string, value: string | number = Date.now()): string {
+export function appendCacheBust(
+  src: string,
+  value: string | number = Date.now(),
+): string {
   if (!src) return src;
   const separator = src.includes("?") ? "&" : "?";
   return `${src}${separator}t=${encodeURIComponent(String(value))}`;
@@ -179,7 +206,8 @@ export function getFileCrossOrigin(src: string): "use-credentials" | undefined {
 
   try {
     const parsed = new URL(resolved, getAppUrl());
-    return parsed.origin !== getAppUrl() && parsed.pathname.startsWith("/api/files/")
+    return parsed.origin !== getAppUrl() &&
+      parsed.pathname.startsWith("/api/files/")
       ? "use-credentials"
       : undefined;
   } catch {
