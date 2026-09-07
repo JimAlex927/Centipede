@@ -9,6 +9,7 @@ import (
 	"centipede/internal/modules/docmost/domain"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const invitationColumns = `
@@ -66,20 +67,24 @@ func (repository *Repository) CreateInvitations(ctx context.Context, workspaceID
 	if len(emails) == 0 || len(emails) > 50 || len(groupIDs) > 25 {
 		return nil, ErrInvalidInput
 	}
+	requestedGroups, err := invitationUUIDs(groupIDs)
+	if err != nil {
+		return nil, err
+	}
 	tx, err := repository.db.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	validGroups := make([]string, 0, len(groupIDs))
+	validGroups := make([]pgtype.UUID, 0, len(requestedGroups))
 	if len(groupIDs) > 0 {
-		rows, queryErr := tx.Query(ctx, `SELECT id::text FROM groups WHERE workspace_id = $1 AND id = ANY($2::uuid[]) AND deleted_at IS NULL`, workspaceID, groupIDs)
+		rows, queryErr := tx.Query(ctx, `SELECT id FROM groups WHERE workspace_id = $1 AND id = ANY($2::uuid[]) AND deleted_at IS NULL`, workspaceID, requestedGroups)
 		if queryErr != nil {
 			return nil, queryErr
 		}
 		for rows.Next() {
-			var id string
+			var id pgtype.UUID
 			if scanErr := rows.Scan(&id); scanErr != nil {
 				rows.Close()
 				return nil, scanErr
@@ -179,8 +184,12 @@ SELECT $1, id FROM groups WHERE workspace_id = $2 AND is_default = true AND dele
 		return domain.User{}, err
 	}
 	if len(groupIDs) > 0 {
+		groupUUIDs, uuidErr := invitationUUIDs(groupIDs)
+		if uuidErr != nil {
+			return domain.User{}, uuidErr
+		}
 		_, err = tx.Exec(ctx, `INSERT INTO group_users (user_id, group_id)
-SELECT $1, id FROM groups WHERE workspace_id = $2 AND id = ANY($3::uuid[]) AND deleted_at IS NULL ON CONFLICT DO NOTHING`, userID, workspaceID, groupIDs)
+SELECT $1, id FROM groups WHERE workspace_id = $2 AND id = ANY($3::uuid[]) AND deleted_at IS NULL ON CONFLICT DO NOTHING`, userID, workspaceID, groupUUIDs)
 		if err != nil {
 			return domain.User{}, err
 		}
@@ -192,6 +201,21 @@ SELECT $1, id FROM groups WHERE workspace_id = $2 AND id = ANY($3::uuid[]) AND d
 		return domain.User{}, err
 	}
 	return repository.UserByID(ctx, userID, workspaceID)
+}
+
+// invitationUUIDs converts request strings to the UUID values expected by
+// pgx's uuid[] codec. Passing []string directly to a $N::uuid[] parameter can
+// fail during parameter encoding before PostgreSQL executes the query.
+func invitationUUIDs(values []string) ([]pgtype.UUID, error) {
+	result := make([]pgtype.UUID, 0, len(values))
+	for _, value := range values {
+		var parsed pgtype.UUID
+		if err := parsed.Scan(strings.TrimSpace(value)); err != nil {
+			return nil, ErrInvalidInput
+		}
+		result = append(result, parsed)
+	}
+	return result, nil
 }
 
 func invitationEmailDomainAllowed(email string, allowed []string) bool {
