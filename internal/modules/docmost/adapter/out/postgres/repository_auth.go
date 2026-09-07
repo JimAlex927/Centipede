@@ -116,7 +116,7 @@ func (repository *Repository) CreateInvitations(ctx context.Context, workspaceID
 		invitation, insertErr := scanInvitation(tx.QueryRow(ctx, `
 INSERT INTO workspace_invitations (email, role, token, group_ids, invited_by_id, workspace_id)
 SELECT $1, $2, $3, $4::uuid[], $5, $6
-WHERE NOT EXISTS (SELECT 1 FROM users WHERE workspace_id = $6 AND lower(email) = $1 AND deleted_at IS NULL)
+WHERE NOT EXISTS (SELECT 1 FROM users WHERE workspace_id = $6 AND lower(email) = $1::text AND deleted_at IS NULL)
 ON CONFLICT (email, workspace_id) DO NOTHING
 RETURNING `+invitationColumns, email, role, token, validGroups, invitedByID, workspaceID))
 		if errors.Is(insertErr, ErrNotFound) {
