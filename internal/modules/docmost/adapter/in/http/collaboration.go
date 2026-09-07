@@ -7,6 +7,7 @@ import (
 	"net/http"
 	pathpkg "path"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -19,13 +20,18 @@ import (
 // CollaborationHandler wraps ygo so the Go service can expose the same basic
 // operational counters as the upstream Docmost collaboration gateway.
 type CollaborationHandler struct {
-	server       *ygows.Server
-	store        *postgres.CollaborationStore
-	realtime     *RealtimeHandler
-	enqueueEmail func(string)
-	enqueueAI    func(string, string)
-	connections  atomic.Int64
-	documents    atomic.Int64
+	server         *ygows.Server
+	store          *postgres.CollaborationStore
+	repository     *postgres.Repository
+	tokens         *tokenService
+	rooms          map[string]*collaborationRoom
+	roomsMu        sync.Mutex
+	allowedOrigins map[string]struct{}
+	realtime       *RealtimeHandler
+	enqueueEmail   func(string)
+	enqueueAI      func(string, string)
+	connections    atomic.Int64
+	documents      atomic.Int64
 }
 
 func (handler *CollaborationHandler) SetRealtimeHandler(realtime *RealtimeHandler) {
@@ -41,18 +47,17 @@ func (handler *CollaborationHandler) SetAIEmbeddingEnqueuer(enqueue func(string,
 }
 
 func (handler *CollaborationHandler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
-	handler.connections.Add(1)
-	defer handler.connections.Add(-1)
-	handler.server.ServeHTTP(response, request)
+	handler.serveMultiplex(response, request)
 }
 
 func (handler *CollaborationHandler) Stats() (connections, documents int64) {
 	return handler.connections.Load(), handler.documents.Load()
 }
 
-// NewCollaborationHandler creates the Hocuspocus-compatible Yjs websocket
-// handler used by the standalone frontend. It is intentionally separate from
-// the REST handler because ygo owns the websocket room lifecycle.
+// NewCollaborationHandler creates the Hocuspocus-compatible Yjs collaboration
+// gateway used by the standalone frontend. The HTTP gateway owns physical
+// connections and room membership; YGo owns the CRDT documents, persistence
+// workers, and bounded warm-room cache behind it.
 func NewCollaborationHandler(repository *postgres.Repository, secret string, allowedOrigins []string, collaborationConfig platformconfig.CollaborationConfig) *CollaborationHandler {
 	store := repository.CollaborationStore()
 	server := ygows.NewServerWithPersistence(store)
@@ -63,7 +68,14 @@ func NewCollaborationHandler(repository *postgres.Repository, secret string, all
 	server.MaxResidentRooms = collaborationConfig.MaxResidentRooms
 	server.PersistCoalesceWindow = collaborationConfig.PersistCoalesceWindow
 	server.PersistCoalesceMaxWait = collaborationConfig.PersistCoalesceMaxWait
-	handler := &CollaborationHandler{server: server, store: store}
+	handler := &CollaborationHandler{
+		server:         server,
+		store:          store,
+		repository:     repository,
+		tokens:         newTokenService(secret),
+		rooms:          make(map[string]*collaborationRoom),
+		allowedOrigins: newOriginSet(allowedOrigins),
+	}
 	store.SetVersionCallback(func(ctx context.Context, pageID, workspaceID string, actorIDs []string, content []byte) {
 		actorID := ""
 		if len(actorIDs) > 0 {
@@ -106,47 +118,6 @@ func NewCollaborationHandler(repository *postgres.Repository, secret string, all
 	// established pages. ygo invokes SaveVersion after persistence flushes and
 	// the adapter makes duplicate snapshots a no-op.
 	server.AutoVersionEvery = 5 * time.Minute
-	tokens := newTokenService(secret)
-	server.HocuspocusFraming = true
-	server.AllowedOrigins = allowedOrigins
-	server.OnFirstPeer = func(context.Context, string) {
-		handler.documents.Add(1)
-	}
-	server.OnLastPeer = func(context.Context, string) {
-		handler.documents.Add(-1)
-	}
-
-	// Match the upstream Hocuspocus flow: allow the WebSocket upgrade and
-	// authenticate with the short-lived collaboration JWT sent in-band by the
-	// provider. Requiring authToken at the HTTP upgrade boundary breaks when the
-	// frontend and Go backend are on different origins because SameSite cookies
-	// are not guaranteed to accompany that handshake.
-	// Hocuspocus sends the collaboration JWT in-band after the websocket
-	// upgrade. Validate it and calculate read-only access for the page.
-	server.OnTokenAuth = func(room, rawToken string) (ygows.ConnectionConfig, error) {
-		claims, err := tokens.parse(rawToken, "collab")
-		if err != nil {
-			return ygows.ConnectionConfig{}, errors.New("invalid collaboration token")
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		user, err := repository.UserByID(ctx, claims.Subject, claims.WorkspaceID)
-		if err != nil || user.DeactivatedAt != nil || user.DeletedAt != nil {
-			return ygows.ConnectionConfig{}, errors.New("user is not active")
-		}
-		pageID, err := pageIDFromRoomName(room)
-		if err != nil {
-			return ygows.ConnectionConfig{}, err
-		}
-		readOnly, err := collaborationReadOnly(ctx, repository, pageID, claims.WorkspaceID, claims.Subject, pointerValue(user.Role))
-		if err != nil {
-			return ygows.ConnectionConfig{}, errors.New("page access denied")
-		}
-		if !readOnly {
-			store.AddContributor(room, claims.Subject)
-		}
-		return ygows.ConnectionConfig{ReadOnly: readOnly}, nil
-	}
 	return handler
 }
 

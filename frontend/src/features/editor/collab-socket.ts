@@ -4,41 +4,46 @@ import {
 } from "@hocuspocus/provider";
 import { getCollaborationUrl } from "@/lib/config.ts";
 
-// YGo currently serves one collaboration room per WebSocket connection. Keep
-// one socket per page and release it as soon as the last editor leaves that
-// page. Delaying the release makes a page switch briefly keep two live
-// collaboration sockets, which adds unnecessary work during navigation.
-const socketsByPageId = new Map<string, HocuspocusProviderWebsocket>();
-const editorCountsByPageId = new Map<string, number>();
+// The Go collaboration gateway multiplexes Hocuspocus rooms on one physical
+// WebSocket. Keep this socket at tab scope so changing pages only attaches a
+// new logical room instead of opening another TCP/WebSocket connection.
+let socket: HocuspocusProviderWebsocket | null = null;
+let editorCount = 0;
+let releaseTimer: ReturnType<typeof setTimeout> | null = null;
 
-export function getCollabSocket(pageId: string): HocuspocusProviderWebsocket {
-  let socket = socketsByPageId.get(pageId);
-  if (!socket) {
-    socket = new HocuspocusProviderWebsocket({
-      url: getCollaborationUrl(`page.${pageId}`),
-      autoConnect: false,
-    });
-    socketsByPageId.set(pageId, socket);
-  }
-  return socket;
+export function getCollabSocket(): HocuspocusProviderWebsocket {
+	if (!socket) {
+		socket = new HocuspocusProviderWebsocket({
+			url: getCollaborationUrl(),
+			autoConnect: false,
+		});
+	}
+	return socket;
 }
 
-export function acquireCollabSocket(pageId: string): void {
-  editorCountsByPageId.set(pageId, (editorCountsByPageId.get(pageId) ?? 0) + 1);
+export function acquireCollabSocket(): void {
+	editorCount += 1;
+	if (releaseTimer) {
+		clearTimeout(releaseTimer);
+		releaseTimer = null;
+	}
 
-  const collabSocket = getCollabSocket(pageId);
-  collabSocket.shouldConnect = true;
-  if (collabSocket.status === WebSocketStatus.Disconnected) {
-    collabSocket.connect();
-  }
+	const collabSocket = getCollabSocket();
+	collabSocket.shouldConnect = true;
+	if (collabSocket.status === WebSocketStatus.Disconnected) {
+		collabSocket.connect();
+	}
 }
 
-export function releaseCollabSocket(pageId: string): void {
-  const nextCount = Math.max(0, (editorCountsByPageId.get(pageId) ?? 0) - 1);
-  editorCountsByPageId.set(pageId, nextCount);
-  if (nextCount > 0) return;
+export function releaseCollabSocket(): void {
+	editorCount = Math.max(0, editorCount - 1);
+	if (editorCount > 0 || releaseTimer) return;
 
-  socketsByPageId.get(pageId)?.disconnect();
-  socketsByPageId.delete(pageId);
-  editorCountsByPageId.delete(pageId);
+	// React can unmount the old page before mounting the new one. Defer the
+	// disconnect by one task so a normal page switch reuses this socket, while
+	// leaving the editor entirely still releases the connection.
+	releaseTimer = setTimeout(() => {
+		releaseTimer = null;
+		if (editorCount === 0) socket?.disconnect();
+	}, 0);
 }

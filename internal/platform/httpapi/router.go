@@ -79,6 +79,7 @@ func NewRouter(cfg config.Config, database *pgxpool.Pool, logger *zap.Logger) ht
 		docmostHandler.ResumePendingZipImports(ctx)
 	}()
 	collaborationHandler := docmosthttp.NewCollaborationHandler(docmostRepository, cfg.Auth.JWTSecret, websocketOrigins, cfg.Collaboration)
+	engine.Any("/collab", gin.WrapH(collaborationHandler))
 	engine.Any("/collab/:room", gin.WrapH(collaborationHandler))
 	engine.GET("/api/collab/stats", func(c *gin.Context) {
 		connections, documents := collaborationHandler.Stats()

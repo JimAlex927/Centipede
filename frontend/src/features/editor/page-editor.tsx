@@ -104,14 +104,14 @@ export default function PageEditor({
   const { data: collabQuery, refetch: refetchCollabToken } = useCollabToken();
   const { pageSlug } = useParams();
   const slugId = extractPageSlugId(pageSlug);
-  const socket = useMemo(() => getCollabSocket(pageId), [pageId]);
+  const socket = useMemo(() => getCollabSocket(), []);
   const hasCollabToken = !!collabQuery?.token;
 
   useEffect(() => {
     if (!hasCollabToken) return;
-    acquireCollabSocket(pageId);
-    return () => releaseCollabSocket(pageId);
-  }, [hasCollabToken, pageId]);
+    acquireCollabSocket();
+    return () => releaseCollabSocket();
+  }, [hasCollabToken]);
 
   const handleStateless = ({ payload }: onStatelessParameters) => {
     try {
