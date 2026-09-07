@@ -12,6 +12,7 @@ import (
 	"centipede/internal/modules/docmost/domain"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -80,6 +81,15 @@ func (handler *Handler) createInvitations(c *gin.Context) {
 	}
 	created, err := handler.repository.CreateInvitations(c.Request.Context(), current.Workspace.ID, current.User.ID, request.Role, request.Emails, request.GroupIDs)
 	if err != nil {
+		handler.logger.Error("create invitations failed",
+			zap.String("request_id", c.GetString("request_id")),
+			zap.String("workspace_id", current.Workspace.ID),
+			zap.String("user_id", current.User.ID),
+			zap.String("role", request.Role),
+			zap.Int("email_count", len(request.Emails)),
+			zap.Int("group_count", len(request.GroupIDs)),
+			zap.Error(err),
+		)
 		if errors.Is(err, postgres.ErrInvalidInput) {
 			writeError(c, http.StatusBadRequest, "Invalid invitation request")
 		} else {

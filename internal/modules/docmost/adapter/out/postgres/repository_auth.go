@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -73,7 +74,7 @@ func (repository *Repository) CreateInvitations(ctx context.Context, workspaceID
 	}
 	tx, err := repository.db.Begin(ctx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("begin invitation transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
@@ -81,19 +82,19 @@ func (repository *Repository) CreateInvitations(ctx context.Context, workspaceID
 	if len(groupIDs) > 0 {
 		rows, queryErr := tx.Query(ctx, `SELECT id FROM groups WHERE workspace_id = $1 AND id = ANY($2::uuid[]) AND deleted_at IS NULL`, workspaceID, requestedGroups)
 		if queryErr != nil {
-			return nil, queryErr
+			return nil, fmt.Errorf("load invitation groups: %w", queryErr)
 		}
 		for rows.Next() {
 			var id pgtype.UUID
 			if scanErr := rows.Scan(&id); scanErr != nil {
 				rows.Close()
-				return nil, scanErr
+				return nil, fmt.Errorf("scan invitation group: %w", scanErr)
 			}
 			validGroups = append(validGroups, id)
 		}
 		rows.Close()
 		if err = rows.Err(); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("iterate invitation groups: %w", err)
 		}
 	}
 
@@ -122,12 +123,12 @@ RETURNING `+invitationColumns, email, role, token, validGroups, invitedByID, wor
 			continue
 		}
 		if insertErr != nil {
-			return nil, insertErr
+			return nil, fmt.Errorf("insert invitation: %w", insertErr)
 		}
 		created = append(created, invitation)
 	}
 	if err = tx.Commit(ctx); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("commit invitations: %w", err)
 	}
 	return created, nil
 }

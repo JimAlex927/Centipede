@@ -15,6 +15,7 @@ import (
 	"centipede/internal/platform/config"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -34,6 +35,7 @@ type Handler struct {
 	storage               application.Storage
 	maxUpload             int64
 	pdfOCR                config.PDFOCRConfig
+	logger                *zap.Logger
 	realtime              *RealtimeHandler
 	licenseService        *enterprise.Service
 	notificationMailQueue chan string
@@ -66,7 +68,10 @@ type principal struct {
 	OAuthScopes  []string
 }
 
-func NewHandler(repository *postgres.Repository, secret string, cookieTTL time.Duration, cookieSecure bool, frontendURL, publicURL, legacyURL string, mailer application.Mailer, storage application.Storage, maxUpload int64, aiConfig config.AIConfig, pdfOCR config.PDFOCRConfig) *Handler {
+func NewHandler(repository *postgres.Repository, secret string, cookieTTL time.Duration, cookieSecure bool, frontendURL, publicURL, legacyURL string, mailer application.Mailer, storage application.Storage, maxUpload int64, aiConfig config.AIConfig, pdfOCR config.PDFOCRConfig, logger *zap.Logger) *Handler {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
 	handler := &Handler{
 		repository: repository, tokens: newTokenService(secret),
 		licenseService: enterprise.NewLicenseService(secret),
@@ -74,7 +79,7 @@ func NewHandler(repository *postgres.Repository, secret string, cookieTTL time.D
 		aiVectorDriver: strings.ToLower(strings.TrimSpace(aiConfig.VectorDriver)),
 		cookieTTL:      cookieTTL, cookieSecure: cookieSecure,
 		frontendURL: strings.TrimRight(frontendURL, "/"), publicURL: strings.TrimRight(publicURL, "/"), legacyURL: strings.TrimRight(legacyURL, "/"),
-		mailer: mailer, storage: storage, maxUpload: maxUpload, pdfOCR: pdfOCR,
+		mailer: mailer, storage: storage, maxUpload: maxUpload, pdfOCR: pdfOCR, logger: logger,
 	}
 	go func() {
 		if handler.repository == nil {

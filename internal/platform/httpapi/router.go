@@ -71,6 +71,7 @@ func NewRouter(cfg config.Config, database *pgxpool.Pool, logger *zap.Logger) ht
 		cfg.Storage.MaxUploadBytes,
 		cfg.AI,
 		cfg.PDFOCR,
+		logger,
 	)
 	docmostHandler.SetLicenseSigningSecret(cfg.License.SigningSecret)
 	go func() {
