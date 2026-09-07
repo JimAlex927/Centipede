@@ -93,6 +93,13 @@ FROM pages WHERE id = $1 AND deleted_at IS NULL`, pageID).Scan(&state, &content)
 	if err != nil {
 		return nil, err
 	}
+	// StoreUpdate persists ydoc as a complete Yjs V1 state update. Reusing it
+	// avoids rebuilding the CRDT from the Tiptap JSON projection and encoding
+	// the whole document again every time a cold room is opened. The fallback
+	// remains necessary for pages created before collaboration initialized ydoc.
+	if len(state) > 0 {
+		return state, nil
+	}
 	doc, err := yjs.Load(state, content)
 	if err != nil {
 		return nil, fmt.Errorf("load page ydoc: %w", err)
