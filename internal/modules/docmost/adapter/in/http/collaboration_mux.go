@@ -196,7 +196,7 @@ func (handler *CollaborationHandler) handleMultiplexFrame(connection *collaborat
 	case collabAuth:
 		handler.handleRoomAuth(connection, roomName, dec)
 	case collabSync, collabSyncReply:
-		handler.handleRoomSync(connection, roomName, messageType, dec.RemainingBytes())
+		handler.handleRoomSync(connection, roomName, dec.RemainingBytes())
 	case collabAwareness:
 		handler.handleRoomAwareness(connection, roomName, dec)
 	case collabQueryAwareness:
@@ -241,7 +241,7 @@ func (handler *CollaborationHandler) handleRoomAuth(connection *collaborationCon
 	connection.send(collaborationFrame(roomName, collaborationAwarenessMessage(room.awareness.EncodeUpdate(nil))))
 }
 
-func (handler *CollaborationHandler) handleRoomSync(connection *collaborationConnection, roomName string, outerType uint64, payload []byte) {
+func (handler *CollaborationHandler) handleRoomSync(connection *collaborationConnection, roomName string, payload []byte) {
 	peer, room := handler.peerRoom(connection, roomName)
 	if peer == nil || room == nil {
 		return
@@ -265,7 +265,11 @@ func (handler *CollaborationHandler) handleRoomSync(connection *collaborationCon
 	if subType == ygsync.MsgSyncStep1 {
 		return
 	}
-	handler.broadcastRoom(room, connection, collaborationFrame(roomName, collaborationMessageWithRaw(outerType, payload)))
+	// SyncReply is a client-side request to apply a sync payload without
+	// echoing it back to the sender. Other peers still consume the update as a
+	// normal Sync message; the Hocuspocus provider does not expose SyncReply as
+	// an incoming message type.
+	handler.broadcastRoom(room, connection, collaborationFrame(roomName, collaborationMessageWithRaw(collabSync, payload)))
 }
 
 func (handler *CollaborationHandler) handleRoomAwareness(connection *collaborationConnection, roomName string, dec *encoding.Decoder) {
