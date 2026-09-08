@@ -1,5 +1,11 @@
 import { NodeViewProps, NodeViewWrapper } from "@tiptap/react";
-import React, { useMemo, useCallback, useState } from "react";
+import React, {
+  useMemo,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import clsx from "clsx";
 import {
   ActionIcon,
@@ -36,6 +42,7 @@ export default function EmbedView(props: NodeViewProps) {
   const { node, selected, updateAttributes, deleteNode, editor } = props;
   const [isHovered, setIsHovered] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
+  const hideMenuTimer = useRef<number | null>(null);
   const {
     src,
     provider,
@@ -72,6 +79,32 @@ export default function EmbedView(props: NodeViewProps) {
     [updateAttributes],
   );
 
+  const showMenu = useCallback(() => {
+    if (hideMenuTimer.current) {
+      window.clearTimeout(hideMenuTimer.current);
+      hideMenuTimer.current = null;
+    }
+    setIsHovered(true);
+  }, []);
+
+  const hideMenu = useCallback(() => {
+    if (hideMenuTimer.current) {
+      window.clearTimeout(hideMenuTimer.current);
+    }
+    hideMenuTimer.current = window.setTimeout(() => {
+      setIsHovered(false);
+      hideMenuTimer.current = null;
+    }, 200);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (hideMenuTimer.current) {
+        window.clearTimeout(hideMenuTimer.current);
+      }
+    };
+  }, []);
+
   async function onSubmit(data: { url: string }) {
     if (!editor.isEditable) {
       return;
@@ -101,8 +134,8 @@ export default function EmbedView(props: NodeViewProps) {
     <NodeViewWrapper
       data-drag-handle
       className={classes.embedNodeView}
-      onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => setIsHovered(false)}
+      onMouseEnter={showMenu}
+      onMouseLeave={hideMenu}
     >
       {embedUrl ? (
         <div className={classes.embedContainer}>
@@ -121,7 +154,11 @@ export default function EmbedView(props: NodeViewProps) {
             })}
           >
             {editor.isEditable && (isHovered || isEditing) && (
-              <div className={classes.embedMenu}>
+              <div
+                className={classes.embedMenu}
+                onMouseEnter={showMenu}
+                onMouseLeave={hideMenu}
+              >
                 <EmbedMenu
                   provider={provider}
                   src={src}
