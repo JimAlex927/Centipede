@@ -33,7 +33,20 @@ const schema = z.object({
 export default function EmbedView(props: NodeViewProps) {
   const { t } = useTranslation();
   const { node, selected, updateAttributes, editor } = props;
-  const { src, provider, width: nodeWidth, height: nodeHeight } = node.attrs;
+  const {
+    src,
+    provider,
+    align,
+    width: nodeWidth,
+    height: nodeHeight,
+  } = node.attrs;
+
+  const alignClass = useMemo(() => {
+    if (align === "left") return "alignLeft";
+    if (align === "right") return "alignRight";
+    if (align === "center") return "alignCenter";
+    return "alignCenter";
+  }, [align]);
 
   const embedUrl = useMemo(() => {
     if (src) {
@@ -95,7 +108,7 @@ export default function EmbedView(props: NodeViewProps) {
             onResize={handleResize}
             isEditable={editor.isEditable}
             selected={selected}
-            className={clsx(classes.embedWrapper, {
+            className={clsx(classes.embedWrapper, alignClass, {
               "ProseMirror-selectednode": selected,
             })}
           >

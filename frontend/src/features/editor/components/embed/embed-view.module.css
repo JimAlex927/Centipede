@@ -8,6 +8,8 @@
 }
 
 .embedWrapper {
+  max-width: 100%;
+
   @mixin light {
     background-color: var(--mantine-color-gray-0);
   }
