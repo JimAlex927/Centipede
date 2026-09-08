@@ -16,6 +16,7 @@ import (
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 	"golang.org/x/oauth2"
 )
 
@@ -63,6 +64,17 @@ func (handler *Handler) oidcLogin(c *gin.Context) {
 		return
 	}
 	callbackURL := handler.backendURL(c) + "/api/sso/oidc/" + url.PathEscape(provider.ID) + "/callback"
+	handler.logger.Info("oidc login authorization redirect",
+		zap.String("request_id", c.GetString("request_id")),
+		zap.String("provider_id", provider.ID),
+		zap.String("workspace_id", workspace.ID),
+		zap.String("request_host", c.Request.Host),
+		zap.String("forwarded_host", c.GetHeader("X-Forwarded-Host")),
+		zap.String("public_url", handler.publicURL),
+		zap.String("callback_url", callbackURL),
+		zap.Int("state_length", len(state)),
+		zap.String("state_fingerprint", oidcStateFingerprint(state)),
+	)
 	config := oauth2.Config{ClientID: clientID, ClientSecret: clientSecret, Endpoint: oidcProvider.Endpoint(), RedirectURL: callbackURL, Scopes: []string{oidc.ScopeOpenID, "profile", "email"}}
 	authURL := config.AuthCodeURL(state,
 		oauth2.SetAuthURLParam("nonce", nonce),
@@ -73,11 +85,51 @@ func (handler *Handler) oidcLogin(c *gin.Context) {
 }
 
 func (handler *Handler) oidcCallback(c *gin.Context) {
-	state, err := handler.tokens.parse(strings.TrimSpace(c.Query("state")), "sso_state")
-	if err != nil || state.ProviderID == "" || state.ProviderID != strings.TrimSpace(c.Param("providerID")) {
+	rawState := strings.TrimSpace(c.Query("state"))
+	requestProviderID := strings.TrimSpace(c.Param("providerID"))
+	state, err := handler.tokens.parse(rawState, "sso_state")
+	if err != nil {
+		handler.logger.Warn("oidc callback state rejected",
+			zap.String("request_id", c.GetString("request_id")),
+			zap.String("request_host", c.Request.Host),
+			zap.String("forwarded_host", c.GetHeader("X-Forwarded-Host")),
+			zap.String("public_url", handler.publicURL),
+			zap.String("provider_id", requestProviderID),
+			zap.Int("state_length", len(rawState)),
+			zap.String("state_fingerprint", oidcStateFingerprint(rawState)),
+			zap.Error(err),
+		)
 		writeError(c, http.StatusBadRequest, "Invalid SSO state")
 		return
 	}
+	if state.ProviderID == "" {
+		handler.logger.Warn("oidc callback state missing provider",
+			zap.String("request_id", c.GetString("request_id")),
+			zap.String("provider_id", requestProviderID),
+			zap.String("state_fingerprint", oidcStateFingerprint(rawState)),
+		)
+		writeError(c, http.StatusBadRequest, "Invalid SSO state")
+		return
+	}
+	if state.ProviderID != requestProviderID {
+		handler.logger.Warn("oidc callback provider mismatch",
+			zap.String("request_id", c.GetString("request_id")),
+			zap.String("state_provider_id", state.ProviderID),
+			zap.String("request_provider_id", requestProviderID),
+			zap.String("state_fingerprint", oidcStateFingerprint(rawState)),
+		)
+		writeError(c, http.StatusBadRequest, "Invalid SSO state")
+		return
+	}
+	handler.logger.Info("oidc callback state accepted",
+		zap.String("request_id", c.GetString("request_id")),
+		zap.String("provider_id", state.ProviderID),
+		zap.String("workspace_id", state.WorkspaceID),
+		zap.String("request_host", c.Request.Host),
+		zap.String("forwarded_host", c.GetHeader("X-Forwarded-Host")),
+		zap.String("public_url", handler.publicURL),
+		zap.String("state_fingerprint", oidcStateFingerprint(rawState)),
+	)
 	if providerError := strings.TrimSpace(c.Query("error")); providerError != "" {
 		writeError(c, http.StatusUnauthorized, "SSO authentication was cancelled")
 		return
@@ -197,6 +249,11 @@ func (handler *Handler) finishSSOLogin(c *gin.Context, user domain.User, workspa
 	}
 	c.Redirect(http.StatusFound, handler.frontendURL+safeSSORedirect(redirect))
 	return nil
+}
+
+func oidcStateFingerprint(value string) string {
+	digest := sha256.Sum256([]byte(value))
+	return base64.RawURLEncoding.EncodeToString(digest[:8])
 }
 
 func randomSSOValue(size int) (string, error) {
