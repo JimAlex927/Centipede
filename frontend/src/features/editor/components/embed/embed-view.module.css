@@ -7,6 +7,14 @@
   justify-content: center;
 }
 
+.embedMenu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  z-index: 20;
+  transform: translateX(-50%);
+}
+
 .embedWrapper {
   max-width: 100%;
 

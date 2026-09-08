@@ -1,203 +1,227 @@
-import { BubbleMenu as BaseBubbleMenu } from "@tiptap/react/menus";
-import { findParentNode, posToDOMRect, useEditorState } from "@tiptap/react";
-import { useCallback } from "react";
-import { Node as PMNode } from "@tiptap/pm/model";
-import { isEditorReady } from "@docmost/editor-ext";
 import {
-  EditorMenuProps,
-  ShouldShowProps,
-} from "@/features/editor/components/table/types/types.ts";
-import { ActionIcon, Tooltip } from "@mantine/core";
+  ActionIcon,
+  Button,
+  FocusTrap,
+  Group,
+  Popover,
+  TextInput,
+  Tooltip,
+} from "@mantine/core";
 import clsx from "clsx";
+import { NodeViewProps } from "@tiptap/react";
 import {
   IconCheck,
   IconCopy,
+  IconEdit,
   IconLayoutAlignCenter,
   IconLayoutAlignLeft,
   IconLayoutAlignRight,
   IconTrash,
 } from "@tabler/icons-react";
+import { useCallback } from "react";
+import { useForm } from "@mantine/form";
+import { z } from "zod/v4";
+import { zod4Resolver } from "mantine-form-zod-resolver";
+import { notifications } from "@mantine/notifications";
 import { useTranslation } from "react-i18next";
+import i18n from "i18next";
+import { getEmbedProviderById, sanitizeUrl } from "@docmost/editor-ext";
 import { useClipboard } from "@/hooks/use-clipboard";
 import classes from "../common/toolbar-menu.module.css";
 
-export function EmbedMenu({ editor }: EditorMenuProps) {
+const schema = z.object({
+  url: z.url({ message: i18n.t("Please enter a valid url") }).trim(),
+});
+
+interface EmbedMenuProps {
+  provider: string;
+  src: string;
+  align: string;
+  updateAttributes: NodeViewProps["updateAttributes"];
+  deleteNode: NodeViewProps["deleteNode"];
+  isEditing: boolean;
+  setIsEditing: (isEditing: boolean) => void;
+}
+
+export function EmbedMenu({
+  provider,
+  src,
+  align,
+  updateAttributes,
+  deleteNode,
+  isEditing,
+  setIsEditing,
+}: EmbedMenuProps) {
   const { t } = useTranslation();
   const clipboard = useClipboard({ timeout: 1500 });
 
-  const editorState = useEditorState({
-    editor,
-    selector: (ctx) => {
-      if (!ctx.editor) {
-        return null;
-      }
-
-      const embedAttrs = ctx.editor.getAttributes("embed");
-
-      return {
-        isAlignLeft: ctx.editor.isActive("embed", { align: "left" }),
-        isAlignCenter: ctx.editor.isActive("embed", { align: "center" }),
-        isAlignRight: ctx.editor.isActive("embed", { align: "right" }),
-        provider: embedAttrs?.provider || "",
-        src: embedAttrs?.src || "",
-      };
+  const embedForm = useForm<{ url: string }>({
+    initialValues: {
+      url: src,
     },
+    validate: zod4Resolver(schema),
   });
 
-  const shouldShow = useCallback(
-    ({ state }: ShouldShowProps) => {
-      if (!state) {
-        return false;
-      }
-
-      return editor.isActive("embed") && editor.getAttributes("embed").src;
+  const setAlign = useCallback(
+    (value: string) => {
+      updateAttributes({ align: value });
     },
-    [editor],
+    [updateAttributes],
   );
 
-  const getReferencedVirtualElement = useCallback(() => {
-    if (!isEditorReady(editor)) return;
-    const { selection } = editor.state;
-    const predicate = (node: PMNode) => node.type.name === "embed";
-    const parent = findParentNode(predicate)(selection);
+  const handleEdit = useCallback(() => {
+    embedForm.setValues({ url: src });
+    setIsEditing(true);
+  }, [embedForm, setIsEditing, src]);
 
-    if (parent) {
-      const dom = editor.view.nodeDOM(parent.pos) as HTMLElement;
-      const domRect = dom.getBoundingClientRect();
-      return {
-        getBoundingClientRect: () => domRect,
-        getClientRects: () => [domRect],
-      };
-    }
+  const handleCloseEdit = useCallback(() => {
+    setIsEditing(false);
+  }, [setIsEditing]);
 
-    const domRect = posToDOMRect(editor.view, selection.from, selection.to);
-    return {
-      getBoundingClientRect: () => domRect,
-      getClientRects: () => [domRect],
-    };
-  }, [editor]);
+  const handleSubmit = useCallback(
+    (data: { url: string }) => {
+      const embedProvider = getEmbedProviderById(provider);
 
-  const alignLeft = useCallback(() => {
-    editor
-      .chain()
-      .focus(undefined, { scrollIntoView: false })
-      .updateAttributes("embed", { align: "left" })
-      .run();
-  }, [editor]);
+      if (embedProvider.id === "iframe") {
+        updateAttributes({ src: sanitizeUrl(data.url) });
+        handleCloseEdit();
+        return;
+      }
 
-  const alignCenter = useCallback(() => {
-    editor
-      .chain()
-      .focus(undefined, { scrollIntoView: false })
-      .updateAttributes("embed", { align: "center" })
-      .run();
-  }, [editor]);
+      if (embedProvider.regex.test(data.url)) {
+        updateAttributes({ src: sanitizeUrl(data.url) });
+        handleCloseEdit();
+        return;
+      }
 
-  const alignRight = useCallback(() => {
-    editor
-      .chain()
-      .focus(undefined, { scrollIntoView: false })
-      .updateAttributes("embed", { align: "right" })
-      .run();
-  }, [editor]);
-
-  const handleCopy = useCallback(() => {
-    clipboard.copy(editorState?.src || "");
-  }, [clipboard, editorState?.src]);
-
-  const handleDelete = useCallback(() => {
-    editor.commands.deleteSelection();
-  }, [editor]);
+      notifications.show({
+        message: t("Invalid {{provider}} embed link", {
+          provider: embedProvider.name,
+        }),
+        position: "top-right",
+        color: "red",
+      });
+    },
+    [handleCloseEdit, provider, t, updateAttributes],
+  );
 
   return (
-    <BaseBubbleMenu
-      editor={editor}
-      pluginKey="embed-menu"
-      updateDelay={0}
-      getReferencedVirtualElement={getReferencedVirtualElement}
-      options={{
-        placement: "top",
-        offset: 8,
-        flip: false,
-      }}
-      shouldShow={shouldShow}
+    <div
+      className={classes.toolbar}
+      onMouseDown={(event) => event.preventDefault()}
     >
-      <div className={classes.toolbar}>
-        <Tooltip position="top" label={t("Align left")} withinPortal={false}>
-          <ActionIcon
-            onClick={alignLeft}
-            size="lg"
-            aria-label={t("Align left")}
-            variant="subtle"
-            className={clsx({ [classes.active]: editorState?.isAlignLeft })}
-          >
-            <IconLayoutAlignLeft size={18} />
-          </ActionIcon>
-        </Tooltip>
+      <Tooltip position="top" label={t("Align left")} withinPortal={false}>
+        <ActionIcon
+          onClick={() => setAlign("left")}
+          size="lg"
+          aria-label={t("Align left")}
+          variant="subtle"
+          className={clsx({ [classes.active]: align === "left" })}
+        >
+          <IconLayoutAlignLeft size={18} />
+        </ActionIcon>
+      </Tooltip>
 
-        <Tooltip position="top" label={t("Align center")} withinPortal={false}>
-          <ActionIcon
-            onClick={alignCenter}
-            size="lg"
-            aria-label={t("Align center")}
-            variant="subtle"
-            className={clsx({ [classes.active]: editorState?.isAlignCenter })}
-          >
-            <IconLayoutAlignCenter size={18} />
-          </ActionIcon>
-        </Tooltip>
+      <Tooltip position="top" label={t("Align center")} withinPortal={false}>
+        <ActionIcon
+          onClick={() => setAlign("center")}
+          size="lg"
+          aria-label={t("Align center")}
+          variant="subtle"
+          className={clsx({ [classes.active]: align === "center" })}
+        >
+          <IconLayoutAlignCenter size={18} />
+        </ActionIcon>
+      </Tooltip>
 
-        <Tooltip position="top" label={t("Align right")} withinPortal={false}>
-          <ActionIcon
-            onClick={alignRight}
-            size="lg"
-            aria-label={t("Align right")}
-            variant="subtle"
-            className={clsx({ [classes.active]: editorState?.isAlignRight })}
-          >
-            <IconLayoutAlignRight size={18} />
-          </ActionIcon>
-        </Tooltip>
+      <Tooltip position="top" label={t("Align right")} withinPortal={false}>
+        <ActionIcon
+          onClick={() => setAlign("right")}
+          size="lg"
+          aria-label={t("Align right")}
+          variant="subtle"
+          className={clsx({ [classes.active]: align === "right" })}
+        >
+          <IconLayoutAlignRight size={18} />
+        </ActionIcon>
+      </Tooltip>
 
-        <div className={classes.divider} />
+      <div className={classes.divider} />
 
-        {editorState?.provider === "youtube" && (
-          <Tooltip
-            position="top"
-            label={clipboard.copied ? t("Copied") : t("Copy link")}
-            withinPortal={false}
-          >
+      <Popover
+        opened={isEditing}
+        onChange={setIsEditing}
+        width={300}
+        position="top"
+        withArrow
+        shadow="md"
+      >
+        <Popover.Target>
+          <Tooltip position="top" label={t("Edit link")} withinPortal={false}>
             <ActionIcon
-              onClick={handleCopy}
+              onClick={handleEdit}
               size="lg"
-              aria-label={clipboard.copied ? t("Copied") : t("Copy link")}
+              aria-label={t("Edit link")}
               variant="subtle"
             >
-              {clipboard.copied ? (
-                <IconCheck size={18} />
-              ) : (
-                <IconCopy size={18} />
-              )}
+              <IconEdit size={18} />
             </ActionIcon>
           </Tooltip>
-        )}
+        </Popover.Target>
+        <Popover.Dropdown bg="var(--mantine-color-body)">
+          <form onSubmit={embedForm.onSubmit(handleSubmit)}>
+            <FocusTrap active={isEditing}>
+              <TextInput
+                placeholder={t("Enter {{provider}} link to embed", {
+                  provider: getEmbedProviderById(provider).name,
+                })}
+                key={embedForm.key("url")}
+                {...embedForm.getInputProps("url")}
+                data-autofocus
+              />
+            </FocusTrap>
 
-        {editorState?.provider === "youtube" && (
-          <div className={classes.divider} />
-        )}
+            <Group justify="center" mt="xs">
+              <Button type="submit">{t("Embed link")}</Button>
+            </Group>
+          </form>
+        </Popover.Dropdown>
+      </Popover>
 
-        <Tooltip position="top" label={t("Delete")} withinPortal={false}>
+      {provider === "youtube" && (
+        <Tooltip
+          position="top"
+          label={clipboard.copied ? t("Copied") : t("Copy link")}
+          withinPortal={false}
+        >
           <ActionIcon
-            onClick={handleDelete}
+            onClick={() => clipboard.copy(src)}
             size="lg"
-            aria-label={t("Delete")}
+            aria-label={clipboard.copied ? t("Copied") : t("Copy link")}
             variant="subtle"
           >
-            <IconTrash size={18} />
+            {clipboard.copied ? (
+              <IconCheck size={18} />
+            ) : (
+              <IconCopy size={18} />
+            )}
           </ActionIcon>
         </Tooltip>
-      </div>
-    </BaseBubbleMenu>
+      )}
+
+      <div className={classes.divider} />
+
+      <Tooltip position="top" label={t("Delete")} withinPortal={false}>
+        <ActionIcon
+          onClick={deleteNode}
+          size="lg"
+          aria-label={t("Delete")}
+          variant="subtle"
+        >
+          <IconTrash size={18} />
+        </ActionIcon>
+      </Tooltip>
+    </div>
   );
 }
 

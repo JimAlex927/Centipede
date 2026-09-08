@@ -1,5 +1,5 @@
 import { NodeViewProps, NodeViewWrapper } from "@tiptap/react";
-import React, { useMemo, useCallback } from "react";
+import React, { useMemo, useCallback, useState } from "react";
 import clsx from "clsx";
 import {
   ActionIcon,
@@ -24,6 +24,7 @@ import {
   sanitizeUrl,
 } from "@docmost/editor-ext";
 import { ResizableWrapper } from "../common/resizable-wrapper";
+import EmbedMenu from "./embed-menu";
 import classes from "./embed-view.module.css";
 
 const schema = z.object({
@@ -32,7 +33,9 @@ const schema = z.object({
 
 export default function EmbedView(props: NodeViewProps) {
   const { t } = useTranslation();
-  const { node, selected, updateAttributes, editor } = props;
+  const { node, selected, updateAttributes, deleteNode, editor } = props;
+  const [isHovered, setIsHovered] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
   const {
     src,
     provider,
@@ -95,7 +98,12 @@ export default function EmbedView(props: NodeViewProps) {
   }
 
   return (
-    <NodeViewWrapper data-drag-handle className={classes.embedNodeView}>
+    <NodeViewWrapper
+      data-drag-handle
+      className={classes.embedNodeView}
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+    >
       {embedUrl ? (
         <div className={classes.embedContainer}>
           <ResizableWrapper
@@ -112,6 +120,19 @@ export default function EmbedView(props: NodeViewProps) {
               "ProseMirror-selectednode": selected,
             })}
           >
+            {editor.isEditable && (isHovered || isEditing) && (
+              <div className={classes.embedMenu}>
+                <EmbedMenu
+                  provider={provider}
+                  src={src}
+                  align={align}
+                  updateAttributes={updateAttributes}
+                  deleteNode={deleteNode}
+                  isEditing={isEditing}
+                  setIsEditing={setIsEditing}
+                />
+              </div>
+            )}
             <iframe
               className={classes.embedIframe}
               src={sanitizeUrl(embedUrl)}

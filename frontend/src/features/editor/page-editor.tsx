@@ -49,7 +49,6 @@ import { TableHandlesLayer } from "@/features/editor/components/table/handle/tab
 import ImageMenu from "@/features/editor/components/image/image-menu.tsx";
 import CalloutMenu from "@/features/editor/components/callout/callout-menu.tsx";
 import VideoMenu from "@/features/editor/components/video/video-menu.tsx";
-import EmbedMenu from "@/features/editor/components/embed/embed-menu.tsx";
 import PdfMenu from "@/features/editor/components/pdf/pdf-menu.tsx";
 import SubpagesMenu from "@/features/editor/components/subpages/subpages-menu.tsx";
 import LightboxView, {
@@ -473,7 +472,6 @@ function CollabPageEditor({
             <TableHandlesLayer editor={editor} />
             <ImageMenu editor={editor} />
             <VideoMenu editor={editor} />
-            <EmbedMenu editor={editor} />
             <PdfMenu editor={editor} />
             <CalloutMenu editor={editor} />
             <SubpagesMenu editor={editor} />
